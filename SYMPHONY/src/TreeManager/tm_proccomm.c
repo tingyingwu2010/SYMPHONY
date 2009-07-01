@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -138,7 +138,7 @@ char processes_alive(tm_prob *tm)
  * Send the active node to the LP
 \*===========================================================================*/
 
-void send_active_node(tm_prob *tm, bc_node *node, char colgen_strat,
+void send_active_node(tm_prob *tm, bc_node *node, int colgen_strat,
 		      int thread_num)
 {
 #ifdef COMPILE_IN_LP
@@ -391,6 +391,7 @@ void send_active_node(tm_prob *tm, bc_node *node, char colgen_strat,
 	 modify_list(&not_fixed, &path[i]->desc.not_fixed);
    }
 
+   bounds_change_desc *bnd_change = NULL;
    for (bpath = branch_path, i = 0; i < level; i++, bpath++){
       for (j = path[i]->bobj.child_num - 1; j >= 0; j--)
 	 if (path[i]->children[j] == path[i+1])
@@ -402,7 +403,31 @@ void send_active_node(tm_prob *tm, bc_node *node, char colgen_strat,
       bpath->rhs = bobj->rhs[j];
       bpath->range = bobj->range[j];
       bpath->branch = bobj->branch[j];
+
+      /* copy changes in variable bounds from each node above this node */
+      merge_bound_changes(&bnd_change, path[i]->desc.bnd_change);
+      /*
+      if (path[i]->desc.bnd_change) {
+         printf("size = %d\n",path[i]->desc.bnd_change->num_changes);
+      } else {
+         printf("parent %d is null\n",path[i]->bc_index);
+      }
+      */
    }
+   /*
+   if (bnd_change->num_changes==0) {
+      FREE(bnd_change);
+      bnd_change = NULL;
+   }
+
+   if (bnd_change) {
+      for (i=0; i<bnd_change->num_changes; i++) {
+         printf("change bound %c of var %d to %f\n",bnd_change->lbub[i], bnd_change->index[i], bnd_change->value[i]);
+      }
+   } else {
+      printf("NULL\n");
+   }
+   */
    
 #ifdef COMPILE_IN_LP
 
@@ -450,7 +475,46 @@ void send_active_node(tm_prob *tm, bc_node *node, char colgen_strat,
    lp[thread_num]->bc_level = node->bc_level;
    lp[thread_num]->lp_data->objval = node->lower_bound;
    lp[thread_num]->colgen_strategy = colgen_strat;
-   
+   lp[thread_num]->desc->bnd_change = bnd_change;
+
+   if (level > 1) {
+      lp[thread_num]->lp_stat.num_cut_iters_in_path =
+         node->parent->num_cut_iters_in_path;
+      lp[thread_num]->lp_stat.num_cuts_added_in_path =
+         node->parent->num_cuts_added_in_path;
+      lp[thread_num]->lp_stat.num_cuts_slacked_out_in_path =
+         node->parent->num_cuts_slacked_out_in_path;
+      lp[thread_num]->lp_stat.avg_cuts_obj_impr_in_path =
+         node->parent->avg_cuts_obj_impr_in_path;
+   } else {
+      lp[thread_num]->lp_stat.num_cut_iters_in_path =
+         node->num_cut_iters_in_path = 0;
+      lp[thread_num]->lp_stat.num_cuts_added_in_path =
+         node->num_cuts_added_in_path = 0;
+      lp[thread_num]->lp_stat.num_cuts_slacked_out_in_path =
+         node->num_cuts_slacked_out_in_path = 0;
+      lp[thread_num]->lp_stat.avg_cuts_obj_impr_in_path =
+         node->avg_cuts_obj_impr_in_path = 0;
+   }
+
+   if (level > 0) {
+      lp[thread_num]->lp_stat.num_str_br_cands_in_path =
+         node->parent->num_str_br_cands_in_path;
+      lp[thread_num]->lp_stat.avg_br_obj_impr_in_path =
+         node->parent->avg_br_obj_impr_in_path;
+
+      lp[thread_num]->lp_stat.num_fp_calls_in_path =
+         node->parent->num_fp_calls_in_path;
+   } else {
+      lp[thread_num]->lp_stat.num_str_br_cands_in_path =
+         node->num_str_br_cands_in_path = 0;
+      lp[thread_num]->lp_stat.avg_br_obj_impr_in_path =
+         node->avg_br_obj_impr_in_path = 0;
+
+      lp[thread_num]->lp_stat.num_fp_calls_in_path =
+         node->num_fp_calls_in_path = 0;
+   }
+
    new_desc->nf_status = desc->nf_status;
    new_desc->basis = basis;
    if (deal_with_nf)
@@ -477,7 +541,7 @@ void send_active_node(tm_prob *tm, bc_node *node, char colgen_strat,
    new_desc->desc_size = desc->desc_size;
    if (new_desc->desc_size > 0)
       memcpy((char *)new_desc->desc, (char *)desc->desc, new_desc->desc_size);
-   
+
 #else
    
    /*------------------------------------------------------------------------*\
@@ -489,7 +553,7 @@ void send_active_node(tm_prob *tm, bc_node *node, char colgen_strat,
    send_int_array(&node->bc_index, 1);
    send_int_array(&node->bc_level, 1);
    send_dbl_array(&node->lower_bound, 1);
-   send_char_array(&colgen_strat, 1);
+   send_int_array(&colgen_strat, 1);
    send_int_array(&desc->nf_status, 1);
 
    pack_basis(&basis, TRUE);
@@ -544,7 +608,7 @@ void receive_node_desc(tm_prob *tm, bc_node *n)
       }
       receive_int_array(&n->sol_size, 1);
       n->sol = (double *) malloc (DSIZE * n->sol_size);
-      receive_dbl_array(n->sol, tm->rootnode->desc.uind.size);
+      receive_dbl_array(n->sol, n->sol.size);
       n->duals = (double *) malloc (DSIZE * tm->bcutnum);
       send_dbl_array(n->duals, tm->bcutnum);
    }
@@ -556,7 +620,7 @@ void receive_node_desc(tm_prob *tm, bc_node *n)
       n->node_status = NODE_STATUS__PRUNED;
       if (node_type == FEASIBLE_PRUNED) {
 	 if (!tm->par.sensitivity_analysis){ 
-	    receive_int_array(&n->sol_size, 1);
+	    receive_int_array(&(n->sol_size), 1);
 	    n->sol = (double *) malloc (DSIZE * n->sol_size);
 	    receive_dbl_array(n->sol, n->sol_size);
 	 }
@@ -578,8 +642,26 @@ void receive_node_desc(tm_prob *tm, bc_node *n)
 	 write_pruned_nodes(tm, n);
       if (tm->par.keep_description_of_pruned == DISCARD ||
 	  tm->par.keep_description_of_pruned == KEEP_ON_DISK_VBC_TOOL){
-	 purge_pruned_nodes(tm, n, node_type == FEASIBLE_PRUNED ?
-			    VBC_FEAS_SOL_FOUND : VBC_PRUNED);
+	 if (tm->par.vbc_emulation == VBC_EMULATION_FILE_NEW){
+	    int vbc_node_pr_reason;
+	    switch (node_type) {
+	     case INFEASIBLE_PRUNED:
+	       vbc_node_pr_reason = VBC_PRUNED_INFEASIBLE;
+	       break;
+	     case OVER_UB_PRUNED:
+	       vbc_node_pr_reason = VBC_PRUNED_FATHOMED;
+	       break;
+	     case FEASIBLE_PRUNED:
+	       vbc_node_pr_reason = VBC_FEAS_SOL_FOUND;
+	       break;
+	     default:
+	       vbc_node_pr_reason = VBC_PRUNED;
+	    }
+	    purge_pruned_nodes(tm, n, vbc_node_pr_reason);
+	 } else {
+	    purge_pruned_nodes(tm, n, node_type == FEASIBLE_PRUNED ?
+		  VBC_FEAS_SOL_FOUND : VBC_PRUNED);
+	 }
       }
       return;
    }
@@ -678,7 +760,55 @@ void receive_node_desc(tm_prob *tm, bc_node *n)
 		       VBC_INTERIOR_NODE);
 	       fclose(f); 
 	    }
-	 }else if (tm->par.vbc_emulation == VBC_EMULATION_LIVE){
+	 }
+#ifdef COMPILE_IN_LP
+	 /* FIXME: This currently only works in sequential mode */
+	 else if (tm->par.vbc_emulation == VBC_EMULATION_FILE_NEW){
+	    FILE *f;
+#pragma omp critical(write_vbc_emulation_file)
+	    if (!(f = fopen(tm->par.vbc_emulation_file_name, "a"))){
+	       printf("\nError opening vbc emulation file\n\n");
+	    }else{
+	       /* calculate measures of infeasibility */
+	       double sum_inf = 0;
+	       int num_inf = 0;
+
+               for (int i=0;i<tm->lpp[n->lp]->lp_data->n;i++) {
+                  double v = tm->lpp[n->lp]->lp_data->x[i];
+		  if (tm->lpp[n->lp]->lp_data->vars[i]->is_int) {
+		     if (fabs(v-floor(v+0.5))>tm->lpp[n->lp]->lp_data->lpetol){
+			num_inf++;
+			sum_inf = sum_inf + fabs(v-floor(v+0.5));
+		     }
+		  }
+	       }
+
+	       char reason[50];
+	       PRINT_TIME2(tm, f);
+	       sprintf(reason, "%s %i", "branched", n->bc_index + 1);
+	       if (n->bc_index==0) {
+		  sprintf(reason, "%s %i", reason, 0);
+	       } else {
+		  sprintf(reason, "%s %i", reason, n->parent->bc_index + 1);
+	       }
+
+	       char branch_dir='M';
+	       if (n->bc_index>0) {
+		  if (n->parent->children[0]==n) {
+		     branch_dir = 'L';
+		  } else {
+		     branch_dir = 'R';
+		  }
+	       }
+	       sprintf(reason, "%s %c %f %f %i", reason, branch_dir,
+		       tm->lpp[n->lp]->lp_data->objval+
+		       tm->lpp[n->lp]->mip->obj_offset, sum_inf, num_inf);
+	       fprintf(f, "%s\n", reason);
+	       fclose(f); 
+	    }
+	 }
+#endif
+	 else if (tm->par.vbc_emulation == VBC_EMULATION_LIVE){
 	    printf("$P %i %i\n", n->bc_index + 1, VBC_INTERIOR_NODE);
 	 }
 	 break;
@@ -713,8 +843,27 @@ void receive_node_desc(tm_prob *tm, bc_node *n)
       if (tm->par.keep_description_of_pruned == KEEP_ON_DISK_FULL ||
 	  tm->par.keep_description_of_pruned == KEEP_ON_DISK_VBC_TOOL){
 	 write_pruned_nodes(tm, n);
-	 purge_pruned_nodes(tm, n, node_type == FEASIBLE_PRUNED ?
-			    VBC_FEAS_SOL_FOUND : VBC_PRUNED);
+	 if (tm->par.vbc_emulation == VBC_EMULATION_FILE_NEW) {
+	    int vbc_node_pr_reason;
+	    switch (node_type) {
+	     case INFEASIBLE_PRUNED:
+	       vbc_node_pr_reason = VBC_PRUNED_INFEASIBLE;
+	       break;
+	     case OVER_UB_PRUNED:
+	       vbc_node_pr_reason = VBC_PRUNED_FATHOMED;
+	       break;
+	     case FEASIBLE_PRUNED:
+	       vbc_node_pr_reason = VBC_FEAS_SOL_FOUND;
+	       break;
+	     default:
+	       vbc_node_pr_reason = VBC_PRUNED;
+	    }
+	    purge_pruned_nodes(tm, n, vbc_node_pr_reason);
+	 }
+	 else {
+	    purge_pruned_nodes(tm, n, node_type == FEASIBLE_PRUNED ?
+		  VBC_FEAS_SOL_FOUND : VBC_PRUNED);
+	 }
       }
    }
 }
@@ -731,11 +880,11 @@ void process_branching_info(tm_prob *tm, bc_node *node)
    int s_bufid;
    int old_cut_name = 0;
    branch_obj *bobj = &node->bobj;
-   char *action;
+   char *action, ch;
    int *feasible;
    double *objval;
    int oldkeep, keep;
-   char olddive, dive;
+   int olddive, dive;
    int new_branching_cut = FALSE, lp, i;
 
    receive_char_array(&bobj->type, 1);
@@ -779,7 +928,8 @@ void process_branching_info(tm_prob *tm, bc_node *node)
    }
    receive_char_array(action, bobj->child_num);
 
-   receive_char_array(&olddive, 1);
+   receive_char_array(&ch, 1);
+   olddive = (int) ch;
    receive_int_array(&keep, 1);
    oldkeep = keep;
    lp = node->lp;
@@ -790,7 +940,8 @@ void process_branching_info(tm_prob *tm, bc_node *node)
    if (oldkeep >= 0 && (olddive == CHECK_BEFORE_DIVE || olddive == DO_DIVE)){
       /* We have to reply */
       s_bufid = init_send(DataInPlace);
-      send_char_array(&dive, 1);
+      ch = (char) dive;
+      send_char_array(&ch, 1);
       if (dive == DO_DIVE || dive == CHECK_BEFORE_DIVE){
 	 /* Give the index of the node kept and also the index of the
 	  * branching cut if necessary */
@@ -914,31 +1065,22 @@ char process_messages(tm_prob *tm, int r_bufid)
 
 void process_ub_message(tm_prob *tm)
 {
-   int s_bufid;
+   int s_bufid, bc_index, feasible;
    double new_ub;
+   char branching;
+      
    /* A new best solution has been found. The solution is sent
     * to the master, but the bound comes here, too.*/
    receive_dbl_array(&new_ub, 1);
+   receive_int_array(&bc_index, 1);
+   receive_int_array(&feasible, 1);
+   receive_char_array(&branching, 1);
    if ((!tm->has_ub) || (tm->has_ub && new_ub < tm->ub)){
-      tm->has_ub = TRUE;
-      tm->ub = new_ub;
+      install_new_ub(tm, new_ub, 0, bc_index, branching, feasible);
       s_bufid = init_send(DataInPlace);
       send_dbl_array(&tm->ub, 1);
       msend_msg(tm->lp.procs, tm->lp.procnum, UPPER_BOUND);
       freebuf(s_bufid);
-   }
-   if (tm->par.vbc_emulation == VBC_EMULATION_FILE){
-      FILE *f;
-#pragma omp critical(write_vbc_emulation_file)
-      if (!(f = fopen(tm->par.vbc_emulation_file_name, "a"))){
-	 printf("\nError opening vbc emulation file\n\n");
-      }else{
-	 PRINT_TIME(tm, f);
-	 fprintf(f, "U %.2f \n", tm->ub);
-	 fclose(f); 
-      }
-   }else if (tm->par.vbc_emulation == VBC_EMULATION_LIVE){
-      printf("$U %.2f\n", tm->ub);
    }
 }
 
@@ -992,6 +1134,7 @@ int receive_lp_timing(tm_prob *tm)
 #ifndef COMPILE_IN_LP
    int i, r_bufid = 0, msgtag, bytes, sender;
    node_times tim;
+   lp_stat_desc lp_stat;
    struct timeval timeout = {5, 0};
    double ramp_up_tm = tm->comp_times.ramp_up_tm;
    double ramp_down_time = tm->comp_times.ramp_down_time;
@@ -1000,6 +1143,7 @@ int receive_lp_timing(tm_prob *tm)
    bc_node *node;
    
    memset(&tm->comp_times, 0, sizeof(node_times));
+   memset(&tm->lp_stat, 0, sizeof(lp_stat_desc));
    tm->comp_times.ramp_up_tm = ramp_up_tm;
    tm->comp_times.ramp_down_time = ramp_down_time;
    tm->comp_times.start_node = start_node;
@@ -1093,10 +1237,14 @@ int receive_lp_timing(tm_prob *tm)
 	       receive_char_array((char *)&tim, sizeof(node_times));
 	       tm->comp_times.communication    += tim.communication;
 	       tm->comp_times.lp               += tim.lp;
+	       tm->comp_times.lp_setup         += tim.lp_setup;
 	       tm->comp_times.separation       += tim.separation;
 	       tm->comp_times.fixing           += tim.fixing;
 	       tm->comp_times.pricing          += tim.pricing;
 	       tm->comp_times.strong_branching += tim.strong_branching;
+	       tm->comp_times.fp               += tim.fp;
+	       tm->comp_times.primal_heur      += tim.primal_heur;
+
 	       tm->comp_times.wall_clock_lp    += tim.wall_clock_lp;
 	       tm->comp_times.ramp_up_lp       += tim.ramp_up_lp;
 	       tm->comp_times.idle_diving      += tim.idle_diving;
@@ -1104,6 +1252,87 @@ int receive_lp_timing(tm_prob *tm)
 	       tm->comp_times.idle_names       += tim.idle_names;
 	       tm->comp_times.idle_cuts        += tim.idle_cuts;
 	       tm->comp_times.cut_pool         += tim.cut_pool;
+
+               tm->comp_times.cuts             += tim.cuts;
+               tm->comp_times.gomory_cuts      += tim.gomory_cuts;
+               tm->comp_times.knapsack_cuts    += tim.knapsack_cuts;
+               tm->comp_times.oddhole_cuts     += tim.oddhole_cuts;
+               tm->comp_times.clique_cuts      += tim.clique_cuts;
+               tm->comp_times.probing_cuts     += tim.probing_cuts;
+               tm->comp_times.mir_cuts         += tim.mir_cuts;
+               tm->comp_times.twomir_cuts      += tim.twomir_cuts;
+               tm->comp_times.rounding_cuts    += tim.rounding_cuts;
+               tm->comp_times.landp_cuts       += tim.landp_cuts;
+               tm->comp_times.flowcover_cuts   += tim.flowcover_cuts;
+               tm->comp_times.lift_and_project_cuts += 
+                 tim.lift_and_project_cuts;
+               tm->comp_times.redsplit_cuts    += tim.redsplit_cuts;
+               tm->comp_times.dupes_and_bad_coeffs_in_cuts += 
+                 tim.dupes_and_bad_coeffs_in_cuts;
+
+	       receive_char_array((char *)&lp_stat, sizeof(lp_stat_desc));
+               tm->lp_stat.lp_calls             += lp_stat.lp_calls;
+               tm->lp_stat.str_br_lp_calls      += lp_stat.str_br_lp_calls;
+               tm->lp_stat.lp_sols              += lp_stat.lp_sols;
+               tm->lp_stat.str_br_bnd_changes   += lp_stat.str_br_bnd_changes;
+               tm->lp_stat.str_br_nodes_pruned  += lp_stat.str_br_nodes_pruned;
+
+               tm->lp_stat.cuts_generated        += lp_stat.cuts_generated;
+               tm->lp_stat.gomory_cuts           += lp_stat.gomory_cuts;
+               tm->lp_stat.knapsack_cuts         += lp_stat.knapsack_cuts;
+               tm->lp_stat.oddhole_cuts          += lp_stat.oddhole_cuts;
+               tm->lp_stat.clique_cuts           += lp_stat.clique_cuts;
+               tm->lp_stat.probing_cuts          += lp_stat.probing_cuts;
+               tm->lp_stat.mir_cuts              += lp_stat.mir_cuts;
+               tm->lp_stat.twomir_cuts           += lp_stat.twomir_cuts;
+               tm->lp_stat.rounding_cuts         += lp_stat.rounding_cuts;
+               tm->lp_stat.landp_cuts            += lp_stat.landp_cuts;
+               tm->lp_stat.flowcover_cuts        += lp_stat.flowcover_cuts;
+               tm->lp_stat.lift_and_project_cuts += 
+                 lp_stat.lift_and_project_cuts;
+               tm->lp_stat.redsplit_cuts         += lp_stat.redsplit_cuts;
+
+               tm->lp_stat.cuts_root             += lp_stat.cuts_root;
+               tm->lp_stat.gomory_cuts_root      += lp_stat.gomory_cuts_root;
+               tm->lp_stat.knapsack_cuts_root    += lp_stat.knapsack_cuts_root;
+               tm->lp_stat.oddhole_cuts_root     += lp_stat.oddhole_cuts_root;
+               tm->lp_stat.clique_cuts_root      += lp_stat.clique_cuts_root;
+               tm->lp_stat.probing_cuts_root     += lp_stat.probing_cuts_root;
+               tm->lp_stat.mir_cuts_root         += lp_stat.mir_cuts_root;
+               tm->lp_stat.twomir_cuts_root      += lp_stat.twomir_cuts_root;
+               tm->lp_stat.rounding_cuts_root    += lp_stat.rounding_cuts_root;
+               tm->lp_stat.landp_cuts_root       += lp_stat.landp_cuts_root;
+               tm->lp_stat.flowcover_cuts_root   += lp_stat.flowcover_cuts_root;
+               tm->lp_stat.lift_and_project_cuts_root +=
+                 lp_stat.lift_and_project_cuts_root;
+               tm->lp_stat.redsplit_cuts_root += 
+                 lp_stat.redsplit_cuts_root;
+
+               tm->lp_stat.num_poor_cuts         += lp_stat.num_poor_cuts;
+               tm->lp_stat.num_duplicate_cuts    += lp_stat.num_duplicate_cuts;
+               tm->lp_stat.num_unviolated_cuts   += lp_stat.num_unviolated_cuts;
+               tm->lp_stat.cuts_deleted_from_lps += 
+                 lp_stat.cuts_deleted_from_lps;
+               tm->lp_stat.cuts_added_to_lps     += lp_stat.cuts_added_to_lps;
+
+               tm->lp_stat.gomory_calls           += lp_stat.gomory_calls;
+               tm->lp_stat.knapsack_calls         += lp_stat.knapsack_calls;
+               tm->lp_stat.oddhole_calls          += lp_stat.oddhole_calls;
+               tm->lp_stat.clique_calls           += lp_stat.clique_calls;
+               tm->lp_stat.probing_calls          += lp_stat.probing_calls;
+               tm->lp_stat.mir_calls              += lp_stat.mir_calls;
+               tm->lp_stat.twomir_calls           += lp_stat.twomir_calls;
+               tm->lp_stat.rounding_calls         += lp_stat.rounding_calls;
+               tm->lp_stat.landp_calls            += lp_stat.landp_calls;
+               tm->lp_stat.flowcover_calls        += lp_stat.flowcover_calls;
+               tm->lp_stat.lift_and_project_calls += 
+                 lp_stat.lift_and_project_calls;
+               tm->lp_stat.redsplit_calls         += lp_stat.redsplit_calls;
+
+               tm->lp_stat.fp_calls              += lp_stat.fp_calls;
+               tm->lp_stat.fp_lp_calls           += lp_stat.fp_lp_calls;
+               tm->lp_stat.fp_num_sols           += lp_stat.fp_num_sols;
+
 	       break;
 
 	     default:
@@ -1131,4 +1360,82 @@ int receive_lp_timing(tm_prob *tm)
 	  FUNCTION_TERMINATED_NORMALLY);
 }
 
+/*===========================================================================*/
+/*===========================================================================*/
+/* 
+ * merge p_bnd_change into bnd_change
+ */
+int merge_bound_changes(bounds_change_desc **bnd_change_ptr, 
+                        bounds_change_desc  *p_bnd_change)
+{
+
+   //return 0;
+
+   if (!p_bnd_change) {
+      return 0;
+   } else {
+      int p_num_changes = p_bnd_change->num_changes;
+      int memory_size = 0;
+      int num_changes = 0;
+      int *index, *p_index = p_bnd_change->index;
+      char *lbub, *p_lbub = p_bnd_change->lbub;
+      double *value, *p_value = p_bnd_change->value;
+      bounds_change_desc *bnd_change = *bnd_change_ptr;
+      int m_stepsize = 200;
+      
+      if (p_bnd_change->num_changes>0) {
+         if (bnd_change == NULL) {
+             bnd_change = (bounds_change_desc *)calloc(1,
+                  sizeof(bounds_change_desc));
+            *bnd_change_ptr = bnd_change;
+
+            /* round up to nearest m_stepsize */
+            memory_size = ((int)(p_num_changes/m_stepsize)+1)*m_stepsize;
+            bnd_change->index = (int *)malloc(memory_size*ISIZE);
+            bnd_change->lbub = (char *)malloc(memory_size*CSIZE);
+            bnd_change->value = (double *)malloc(memory_size*DSIZE);
+
+            memcpy(bnd_change->index, p_index, ISIZE*p_num_changes);
+            memcpy(bnd_change->lbub,  p_lbub,  CSIZE*p_num_changes);
+            memcpy(bnd_change->value, p_value, DSIZE*p_num_changes);
+            num_changes = p_num_changes;
+            bnd_change->num_changes = num_changes;
+         } else {
+            index = bnd_change->index;
+            lbub  = bnd_change->lbub;
+            value = bnd_change->value;
+            num_changes = bnd_change->num_changes;
+            memory_size = ((int)(num_changes/m_stepsize)+1)*m_stepsize;
+            for (int k=0; k<p_num_changes; k++) {
+               /* see if it already exists */
+               int l=0;
+               for (l=0; l<bnd_change->num_changes; l++) {
+                  if (index[l]==p_index[k] && lbub[l]==p_lbub[k]) {
+                     value[l] = p_value[k];
+                     break;
+                  }
+               }
+               if (l>=bnd_change->num_changes) {
+                  if (memory_size<=num_changes+1) {
+                     memory_size+=m_stepsize;
+                     index = (int *)realloc(index, memory_size*ISIZE);
+                     lbub = (char *)realloc(lbub, memory_size*CSIZE);
+                     value = (double *)realloc(value, memory_size*DSIZE);
+                  }
+                  index[num_changes] = p_index[k];
+                  lbub[num_changes] = p_lbub[k];
+                  value[num_changes] = p_value[k];
+                  num_changes++;
+               }
+            }
+            bnd_change->index = index;
+            bnd_change->lbub  = lbub;
+            bnd_change->value = value;
+            bnd_change->num_changes = num_changes;
+         }
+      }
+      *bnd_change_ptr = bnd_change;
+   }
+   return 0;
+}
 

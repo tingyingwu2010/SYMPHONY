@@ -2,12 +2,12 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
 /* This file was developed by Menal Guzelsoy for the SYMPHONY OSI interface. */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -531,39 +531,53 @@ int resolve_node(sym_environment *env, bc_node *node)
 /*===========================================================================*/
 /*===========================================================================*/
 
-void update_tree_bound(sym_environment *env, bc_node *root, int change_type)
+int update_tree_bound(sym_environment *env, bc_node *root, int *cut_num, int *cuts_ind, char *cru_vars, 
+		      int change_type)
 {
+
    int i, resolve = 0;
-		 
+   char deletable = TRUE;   
+
    if (root){
+
+      check_trim_tree(env, root, cut_num, cuts_ind, change_type);
+      
       if (root->node_status == NODE_STATUS__PRUNED || 
 	  root->node_status == NODE_STATUS__INTERRUPTED || 
 	  root->feasibility_status == PRUNED_HAS_CAN_SOLUTION || 
 	  root->feasibility_status == NOT_PRUNED_HAS_CAN_SOLUTION){
-	 if(change_type == OBJ_COEFF_CHANGED || change_type == RHS_CHANGED || COL_BOUNDS_CHANGED){      
+	 if(change_type == OBJ_COEFF_CHANGED || change_type == RHS_CHANGED || 
+	    change_type == COL_BOUNDS_CHANGED ||  change_type == COLS_ADDED){
 	   if (root->feasibility_status == FEASIBLE_PRUNED ||
 	       root->feasibility_status == PRUNED_HAS_CAN_SOLUTION ||
 	       root->feasibility_status == NOT_PRUNED_HAS_CAN_SOLUTION){
 	      
 	      check_better_solution(env, root, FALSE, change_type);
 	   }
-
+	   
 	   if (root->feasibility_status == NOT_PRUNED_HAS_CAN_SOLUTION && 
 	       root->bobj.child_num > 0){
+	      for(i = 0; i<root->bobj.child_num; i++){
+		 if(!update_tree_bound(env, root->children[i], cut_num, cuts_ind, cru_vars, change_type)){
+		    deletable = FALSE;
+		 }
+	      }
 	      if(change_type == COL_BOUNDS_CHANGED && root->bobj.child_num > 0){
 		 update_branching_decisions(env, root, change_type);
-	      }
-	      for(i = 0; i<root->bobj.child_num; i++){
-		 update_tree_bound(env, root->children[i], change_type);
-	      }
+	      }	      
+
 	   } else{
-	      root->node_status = NODE_STATUS__WARM_STARTED;	      
+	      if(root->node_status == NODE_STATUS__WSPRUNED) 
+		 root->node_status = NODE_STATUS__PRUNED;		 
+	      else 
+		 root->node_status = NODE_STATUS__WARM_STARTED; 
 	      if(resolve == 0){
-		 root->lower_bound = MAXDOUBLE;
+		 root->lower_bound = -MAXDOUBLE;
 	      }else{
-		 resolve_node(env, root);
+		 resolve_node(env, root);		 
 	      }
 	   }
+	   root->feasibility_status = 0; // or? ROOT_NODE;
 	 }
       } else{
 	 if(root->bobj.child_num > 0){
@@ -575,36 +589,146 @@ void update_tree_bound(sym_environment *env, bc_node *root, int change_type)
 		  root->bobj.child_num = 0;
 		  root->node_status = NODE_STATUS__WARM_STARTED;
 		  if(resolve == 0){
-		     root->lower_bound = MAXDOUBLE;
+		     root->lower_bound = -MAXDOUBLE;
 		  }else{
 		     resolve_node(env, root);
 		  }		  
-	       }
-	    } else {	       
+	       } 
+	    } else {		              
 	       if(change_type == COL_BOUNDS_CHANGED && root->bobj.child_num > 0){
 		  update_branching_decisions(env, root, change_type);
 	       }
 	       for(i = 0; i<root->bobj.child_num; i++){
-		  update_tree_bound(env, root->children[i], change_type);
-	       }
+		  if(!update_tree_bound(env, root->children[i], cut_num, cuts_ind, cru_vars, change_type)){
+		     deletable = FALSE;
+		  }
+	       }	    
 	    }
 	 }else{ 
-	    root->node_status = NODE_STATUS__WARM_STARTED;
+	    if(root->node_status == NODE_STATUS__WSPRUNED) 
+	       root->node_status = NODE_STATUS__PRUNED;
+	    else 
+	       root->node_status = NODE_STATUS__WARM_STARTED;
 	    if(resolve == 0){
-	       root->lower_bound = MAXDOUBLE;
+	       root->lower_bound = -MAXDOUBLE;
 	    }else{
 	       resolve_node(env, root);
 	    }
 	 }
       }
+
+      /* should be before resolve!!!*/
+      if(change_type == COLS_ADDED){
+	 update_node_desc(env, root, change_type);
+      }
+      
+      if(env->warm_start->trim_tree == ON_CRU_VARS){
+	 if(deletable && root->bobj.child_num){
+	    for(i = 0; i<root->bobj.child_num; i++){
+	       ws_free_subtree(env, root->children[i], change_type, FALSE, TRUE);
+	    }
+	    root->node_status = NODE_STATUS__WARM_STARTED; 
+	    if(resolve == 0){
+	       root->lower_bound = -MAXDOUBLE;
+	    }else{
+	       resolve_node(env, root);
+	    }
+	    root->bobj.child_num = 0;
+	    if(root->bc_level){
+	       if(cru_vars[root->parent->bobj.name]){
+		  deletable = FALSE;
+	       }
+	    }
+	 }
+	 if(!deletable && root->bobj.child_num){
+	    for(i = 0; i<root->bobj.child_num; i++){
+	       register_cuts(root->children[i], cut_num, cuts_ind);
+	    }
+	 }
+	 if(root->bc_level){
+	    if(cru_vars[root->parent->bobj.name]){
+	       deletable = FALSE;
+	    }
+	 }
+      }
+   }
+   return deletable;
+}
+
+/*===========================================================================*/
+/*===========================================================================*/
+
+
+void register_cuts(bc_node *root, int *cut_num,  int *cuts_ind){
+
+   int i, r_cnum = root->desc.cutind.size;
+   int *c_list = root->desc.cutind.list;
+   int c_ind; 
+   if(r_cnum > 0){
+      for(i = 0; i < r_cnum; i++){
+	 c_ind = c_list[i];
+	 if(cuts_ind[c_ind] < 0){
+	    cuts_ind[c_ind] = c_list[i] = *cut_num;
+	    (*cut_num)++;
+	 }else{
+	    c_list[i] = cuts_ind[c_ind];
+	 }
+      }
    }
 }
+
+/*===========================================================================*/
+/*===========================================================================*/
+
+void update_node_desc(sym_environment *env, bc_node *root, int change_type){
+
+   node_desc *desc = &(root->desc); 
+   int i, tmp_size, colnum = env->mip->n;
+   int added_colnum = env->mip->new_col_num;
+   int old_colnum = colnum - added_colnum;
+
+   if(change_type == COLS_ADDED && added_colnum > 0){
+      if(desc->uind.type == EXPLICIT_LIST){
+	 tmp_size = desc->uind.size;
+	 if(tmp_size < colnum){
+	    desc->uind.list = (int *) realloc((int *)desc->uind.list,
+					      (tmp_size + added_colnum) * ISIZE);
+	    for(i = 0; i < added_colnum; i++){
+	       desc->uind.list[tmp_size + i] = old_colnum + i;
+	    }
+	    desc->uind.size += added_colnum;
+	 }
+      }
+      if(desc->basis.basis_exists && 
+	 desc->basis.extravars.type == EXPLICIT_LIST){
+	 tmp_size = desc->basis.extravars.size;
+	 if(tmp_size < colnum){
+	   /*  if(desc->basis.extravars.list){ */
+/* 	       desc->basis.extravars.list =  */
+/* 		  (int*)realloc((int*)desc->basis.extravars.list,  */
+/* 				(tmp_size + added_colnum) *ISIZE); */
+/* 	       for(i = 0; i < added_colnum; i++){ */
+/* 		  desc->basis.extravars.list[tmp_size + i] = old_colnum + i; */
+/* 	       } */
+/* 	    } */
+	    desc->basis.extravars.stat = 
+	       (int*)realloc((int*)desc->basis.extravars.stat, 
+			     (tmp_size + added_colnum) *ISIZE);	 
+	    for(i = 0; i < added_colnum; i++){
+	       desc->basis.extravars.stat[tmp_size + i] = VAR_AT_LB;
+	    }
+	    desc->basis.extravars.size += added_colnum;
+	 }
+      }
+   }   					    
+}
+
 /*===========================================================================*/
 /*===========================================================================*/
 void update_branching_decisions(sym_environment *env, bc_node *root, int change_type)
 {
-   int i;
-   int type = 1;
+   int i, j;
+   int type = 0;
    int resolve = 0;
    int deleted = 0;
 
@@ -625,8 +749,12 @@ void update_branching_decisions(sym_environment *env, bc_node *root, int change_
 		   }
 		}else {
 		   if(root->bobj.rhs[i] < env->mip->lb[root->bobj.name]){
-		      ws_free_subtree(env, root->children[i], change_type, FALSE, TRUE);
-		      deleted++;
+		      root->children[i]->node_status = NODE_STATUS__WSPRUNED;		      
+		      root->children[i]->feasibility_status = INFEASIBLE_PRUNED;
+		      for(j = 0; j<root->children[i]->bobj.child_num; j++){
+			 ws_free_subtree(env, root->children[i]->children[j], change_type, FALSE, TRUE);
+		      }
+		      root->children[i]->bobj.child_num = 0;		      
 		   }
 		   else if(root->bobj.rhs[i] > env->mip->ub[root->bobj.name]){
 		      root->bobj.rhs[i] = floor(env->mip->ub[root->bobj.name]);
@@ -644,8 +772,12 @@ void update_branching_decisions(sym_environment *env, bc_node *root, int change_
 		   }
 		}else {
 		   if(root->bobj.rhs[i] > env->mip->ub[root->bobj.name]){
-		      ws_free_subtree(env, root->children[i], change_type, FALSE, TRUE);
-		      deleted++;
+		      root->children[i]->node_status = NODE_STATUS__WSPRUNED;		      
+		      root->children[i]->feasibility_status = INFEASIBLE_PRUNED;
+		      for(j = 0; j<root->children[i]->bobj.child_num; j++){
+			 ws_free_subtree(env, root->children[i]->children[j], change_type, FALSE, TRUE);
+		      }
+		      root->children[i]->bobj.child_num = 0;
 		   }
 		   else if(root->bobj.rhs[i] < env->mip->lb[root->bobj.name]){
 		      root->bobj.rhs[i] = ceil(env->mip->lb[root->bobj.name]);
@@ -664,7 +796,8 @@ void update_branching_decisions(sym_environment *env, bc_node *root, int change_
       }
       root->bobj.child_num -= deleted;
       if(root->bobj.child_num <= 0){
-	 root->node_status = NODE_STATUS__WARM_STARTED;
+	 if(root->node_status !=NODE_STATUS__WSPRUNED)
+	    root->node_status = NODE_STATUS__WARM_STARTED;
 	 if(resolve == 0){
 	    root->lower_bound = MAXDOUBLE;
 	 }else{
@@ -676,7 +809,55 @@ void update_branching_decisions(sym_environment *env, bc_node *root, int change_
 
 /*===========================================================================*/
 /*===========================================================================*/
+void check_trim_tree(sym_environment *env, bc_node *root, int *cut_num, 
+		     int *cuts_ind, int change_type)		     
+{
+   int i;
+   char trim_type = env->warm_start->trim_tree;
+   int level = env->warm_start->trim_tree_level;
+   int index = env->warm_start->trim_tree_index;
+   problem_stat *stat = &(env->warm_start->stat);   
+   int trim_subtree = FALSE;
 
+   if(trim_type){
+      register_cuts(root, cut_num, cuts_ind);
+   }
+   
+   if(trim_type == TRIM_INDEX){	    
+      if(root->bobj.child_num > 0){
+	 for (i = 0; i < root->bobj.child_num; i++){	
+	    if(root->children[i]->bc_index <= index){
+	       break;
+	    }
+	 }
+	 if(i >= root->bobj.child_num){
+	    trim_subtree = TRUE;
+	 }
+      }
+   }else if(trim_type == TRIM_LEVEL){
+      if(root->bc_level >= level){
+	 trim_subtree = TRUE;
+      }
+   }
+   
+   if(trim_subtree && root->bobj.child_num){
+      for (i = 0; i < root->bobj.child_num; i++){	
+	 ws_free_subtree(env, root->children[i], change_type, TRUE, FALSE);
+      }
+      root->bobj.child_num = 0;
+   }else{      
+      for (i = 0; i < root->bobj.child_num; i++){	
+	 root->children[i]->bc_index = stat->tree_size++;
+	 stat->created++;	    
+      }
+   }
+
+   if (root->node_status == NODE_BRANCHED_ON && root->bobj.child_num){
+      stat->analyzed++;
+   }  
+}
+/*===========================================================================*/
+/*===========================================================================*/
 
 void cut_ws_tree_index(sym_environment *env, bc_node *root, int index, 
 		       problem_stat *stat, int change_type)
@@ -793,8 +974,14 @@ void check_better_solution(sym_environment * env, bc_node *root, int delete_node
    double obj[2] = {0.0, 0.0}, gamma, tau, objval;
    int *matbeg, *matind;
    double *rowact = NULL, *matval, *colsol = NULL; 
-   char feasible = TRUE;
+   int feasible = TRUE;
 
+
+#ifdef USE_SYM_APPLICATION
+   /* for now, just assume it is infeasible */
+
+#else
+   
    MIPdesc *mip = env->mip;
    lp_sol *best_sol = &(env->warm_start->best_sol);
 
@@ -813,7 +1000,7 @@ void check_better_solution(sym_environment * env, bc_node *root, int delete_node
    }
 
    if(feasible){
-      if(change_type == OBJ_COEFF_CHANGED){
+      if(change_type == OBJ_COEFF_CHANGED || change_type == COLS_ADDED){
 	 if(!env->par.mc_warm_start){
 	    for(i = 0; i<root->sol_size; i++){
 	       upper_bound += mip->obj[root->sol_ind[i]] * root->sol[i];
@@ -968,7 +1155,7 @@ void check_better_solution(sym_environment * env, bc_node *root, int delete_node
       
       FREE(best_sol->xind);
       FREE(best_sol->xval);
-
+      
       //      if(delete_node){
       best_sol->xind = root->sol_ind;
       best_sol->xval = root->sol;
@@ -985,7 +1172,7 @@ void check_better_solution(sym_environment * env, bc_node *root, int delete_node
    FREE(colsol);
    FREE(root->sol);
    FREE(root->sol_ind);
-   
+#endif
 }
 
 /*===========================================================================*/
@@ -1016,11 +1203,12 @@ int copy_node(bc_node * n_to, bc_node *n_from)
    if (n_from->feasibility_status == FEASIBLE_PRUNED ||
        n_from->feasibility_status == PRUNED_HAS_CAN_SOLUTION ||
        n_from->feasibility_status == NOT_PRUNED_HAS_CAN_SOLUTION){
-      
-      n_to->sol = (double *)malloc(n_from->sol_size*DSIZE);
-      n_to->sol_ind = (int *)malloc(n_from->sol_size*ISIZE);
-      memcpy(n_to->sol, n_from->sol, n_from->sol_size * DSIZE);
-      memcpy(n_to->sol_ind, n_from->sol_ind, n_from->sol_size * ISIZE);
+      if(n_from->sol){
+	 n_to->sol = (double *)malloc(n_from->sol_size*DSIZE);
+	 n_to->sol_ind = (int *)malloc(n_from->sol_size*ISIZE);
+	 memcpy(n_to->sol, n_from->sol, n_from->sol_size * DSIZE);
+	 memcpy(n_to->sol_ind, n_from->sol_ind, n_from->sol_size * ISIZE);
+      }
    }
   
 #ifdef TRACE_PATH
@@ -1100,69 +1288,69 @@ int copy_node(bc_node * n_to, bc_node *n_from)
       memcpy( n_to->desc.uind.list,  n_from->desc.uind.list, 
 	      n_to->desc.uind.size*ISIZE);
    }
-
-   if (n_to->desc.basis.basevars.size){
-      n_to->desc.basis.basevars.stat = 
-	 (int *) malloc(n_to->desc.basis.basevars.size*ISIZE);
-      memcpy( n_to->desc.basis.basevars.stat,  
-	      n_from->desc.basis.basevars.stat,
-	      n_to->desc.basis.basevars.size*ISIZE);	  
-      if (n_to->desc.basis.basevars.type == WRT_PARENT){         
-	 n_to->desc.basis.basevars.list = 
+   if(n_to->desc.basis.basis_exists){
+      if (n_to->desc.basis.basevars.size){
+	 n_to->desc.basis.basevars.stat = 
 	    (int *) malloc(n_to->desc.basis.basevars.size*ISIZE);
-	 memcpy( n_to->desc.basis.basevars.list,  
-		 n_from->desc.basis.basevars.list,
-		 n_to->desc.basis.basevars.size*ISIZE);	  		 
+	 memcpy( n_to->desc.basis.basevars.stat,  
+		 n_from->desc.basis.basevars.stat,
+		 n_to->desc.basis.basevars.size*ISIZE);	  
+	 if (n_to->desc.basis.basevars.type == WRT_PARENT){         
+	    n_to->desc.basis.basevars.list = 
+	       (int *) malloc(n_to->desc.basis.basevars.size*ISIZE);
+	    memcpy( n_to->desc.basis.basevars.list,  
+		    n_from->desc.basis.basevars.list,
+		    n_to->desc.basis.basevars.size*ISIZE);	  		 
+	 }
       }
-   }
-
-   if (n_to->desc.basis.extravars.size){
-      n_to->desc.basis.extravars.stat = 
-	 (int *) malloc(n_to->desc.basis.extravars.size*ISIZE);
-      memcpy( n_to->desc.basis.extravars.stat,  
-	      n_from->desc.basis.extravars.stat,
-	      n_to->desc.basis.extravars.size*ISIZE);	  
-      if (n_to->desc.basis.extravars.type == WRT_PARENT){         
-	 n_to->desc.basis.extravars.list = 
+      
+      if (n_to->desc.basis.extravars.size){
+	 n_to->desc.basis.extravars.stat = 
 	    (int *) malloc(n_to->desc.basis.extravars.size*ISIZE);
-	 memcpy( n_to->desc.basis.extravars.list,  
-		 n_from->desc.basis.extravars.list,
-		 n_to->desc.basis.extravars.size*ISIZE);	        
+	 memcpy( n_to->desc.basis.extravars.stat,  
+		 n_from->desc.basis.extravars.stat,
+		 n_to->desc.basis.extravars.size*ISIZE);	  
+	 if (n_to->desc.basis.extravars.type == WRT_PARENT){         
+	    n_to->desc.basis.extravars.list = 
+	       (int *) malloc(n_to->desc.basis.extravars.size*ISIZE);
+	    memcpy( n_to->desc.basis.extravars.list,  
+		    n_from->desc.basis.extravars.list,
+		    n_to->desc.basis.extravars.size*ISIZE);	        
+	 }
       }
-   }
-
-   if (n_to->desc.basis.baserows.size){
-      n_to->desc.basis.baserows.stat = 
-	 (int *) malloc(n_to->desc.basis.baserows.size*ISIZE);
-      memcpy( n_to->desc.basis.baserows.stat,  
-	      n_from->desc.basis.baserows.stat,
-	      n_to->desc.basis.baserows.size*ISIZE);	  
-      if (n_to->desc.basis.baserows.type == WRT_PARENT){         
-	 n_to->desc.basis.baserows.list = 
+      
+      if (n_to->desc.basis.baserows.size){
+	 n_to->desc.basis.baserows.stat = 
 	    (int *) malloc(n_to->desc.basis.baserows.size*ISIZE);
-	 memcpy( n_to->desc.basis.baserows.list,  
-		 n_from->desc.basis.baserows.list,
+	 memcpy( n_to->desc.basis.baserows.stat,  
+		 n_from->desc.basis.baserows.stat,
 		 n_to->desc.basis.baserows.size*ISIZE);	  
+	 if (n_to->desc.basis.baserows.type == WRT_PARENT){         
+	    n_to->desc.basis.baserows.list = 
+	       (int *) malloc(n_to->desc.basis.baserows.size*ISIZE);
+	    memcpy( n_to->desc.basis.baserows.list,  
+		    n_from->desc.basis.baserows.list,
+		    n_to->desc.basis.baserows.size*ISIZE);	  
+	 }
       }
-   }
-
-   if (n_to->desc.basis.extrarows.size){
-      n_to->desc.basis.extrarows.stat = 
-	 (int *) malloc(n_to->desc.basis.extrarows.size*ISIZE);   
-      memcpy( n_to->desc.basis.extrarows.stat,  
-	      n_from->desc.basis.extrarows.stat,
-	      n_to->desc.basis.extrarows.size*ISIZE);	  
-      if (n_to->desc.basis.extrarows.type == WRT_PARENT){         
-	 n_to->desc.basis.extrarows.list = 
-	    (int *) malloc(n_to->desc.basis.extrarows.size*ISIZE);
-	 memcpy( n_to->desc.basis.extrarows.list,  
-		 n_from->desc.basis.extrarows.list,
+      
+      if (n_to->desc.basis.extrarows.size){
+	 n_to->desc.basis.extrarows.stat = 
+	    (int *) malloc(n_to->desc.basis.extrarows.size*ISIZE);   
+	 memcpy( n_to->desc.basis.extrarows.stat,  
+		 n_from->desc.basis.extrarows.stat,
 		 n_to->desc.basis.extrarows.size*ISIZE);	  
-      }
-   }      
-
+	 if (n_to->desc.basis.extrarows.type == WRT_PARENT){         
+	    n_to->desc.basis.extrarows.list = 
+	       (int *) malloc(n_to->desc.basis.extrarows.size*ISIZE);
+	    memcpy( n_to->desc.basis.extrarows.list,  
+		    n_from->desc.basis.extrarows.list,
+		    n_to->desc.basis.extrarows.size*ISIZE);	  
+	 }
+      }      
+   }
    if (n_to->desc.not_fixed.size){
-      n_to->desc.not_fixed.list = 
+	 n_to->desc.not_fixed.list = 
 	 (int *) malloc(n_to->desc.not_fixed.size*ISIZE);	 
       memcpy( n_to->desc.not_fixed.list,  n_from->desc.not_fixed.list, 
 	      n_to->desc.not_fixed.size*ISIZE);
@@ -1179,6 +1367,31 @@ int copy_node(bc_node * n_to, bc_node *n_from)
       memcpy(n_to->desc.desc, n_from->desc.desc, 
 	     n_to->desc.desc_size*CSIZE);   
    }
+
+   if(n_to->desc.bnd_change){
+      n_to->desc.bnd_change = (bounds_change_desc *)
+	 calloc(sizeof(bounds_change_desc),1);
+      if(n_from->desc.bnd_change->num_changes){
+	 n_to->desc.bnd_change->index =(int *)malloc
+	    (ISIZE *n_from->desc.bnd_change->num_changes);
+	 n_to->desc.bnd_change->lbub =(char *)malloc
+	    (CSIZE *n_from->desc.bnd_change->num_changes);
+	 n_to->desc.bnd_change->value =(double *)malloc
+	    (DSIZE *n_from->desc.bnd_change->num_changes);
+	 memcpy( n_to->desc.bnd_change->index,
+		 n_from->desc.bnd_change->index,
+		 ISIZE *n_from->desc.bnd_change->num_changes);
+	 memcpy( n_to->desc.bnd_change->lbub,
+		 n_from->desc.bnd_change->lbub,
+		 CSIZE *n_from->desc.bnd_change->num_changes);
+	 memcpy( n_to->desc.bnd_change->value,
+		 n_from->desc.bnd_change->value,
+		 DSIZE *n_from->desc.bnd_change->num_changes);
+      }
+      n_to->desc.bnd_change->num_changes =
+	 n_from->desc.bnd_change->num_changes;
+   }
+   
 
    return(FUNCTION_TERMINATED_NORMALLY);      
 }
@@ -1580,7 +1793,8 @@ int set_param(sym_environment *env, char *line)
    cg_params *cg_par = &env->par.cg_par;
    cp_params *cp_par = &env->par.cp_par;
    dg_params *dg_par = &env->par.dg_par;
-   
+   prep_params *prep_par = &env->par.prep_par;
+
    strcpy(key,"");
    sscanf(line,"%s%s", key, value);
    
@@ -1591,6 +1805,7 @@ int set_param(sym_environment *env, char *line)
       READ_INT_PAR(env->par.verbosity);
       tm_par->verbosity = lp_par->verbosity = cg_par->verbosity =
 	 cp_par->verbosity = env->par.verbosity;
+      prep_par->verbosity = env->par.verbosity;
       return(0);
    }
    else if (strcmp(key, "test") == 0){
@@ -1833,7 +2048,7 @@ int set_param(sym_environment *env, char *line)
    /***********************************************************************
     ***                  Treemanager parameters                         ***
     ***********************************************************************/
-   else if (strcmp(key, "TM_verbosity") == 0){
+   if (strcmp(key, "TM_verbosity") == 0){
       READ_INT_PAR(tm_par->verbosity);
       return(0);
    }
@@ -1955,14 +2170,14 @@ int set_param(sym_environment *env, char *line)
       return(0);
    }
    else if(strcmp(key, "keep_warm_start") == 0){
-      READ_INT_PAR(tm_par->keep_description_of_pruned);
-      if (tm_par->keep_description_of_pruned){
+      if (value[0]){
 	 tm_par->keep_description_of_pruned = 
-	    lp_par->keep_description_of_pruned = KEEP_IN_MEMORY;
+	   lp_par->keep_description_of_pruned = KEEP_IN_MEMORY;
+         lp_par->should_reuse_lp = FALSE; //by asm4
          return(0);
-      } else
+   } else
 	 tm_par->keep_description_of_pruned = 
-	    lp_par->keep_description_of_pruned = DISCARD;
+	   lp_par->keep_description_of_pruned = DISCARD;
       return(0);
    }
    else if (strcmp(key, "warm_start") == 0 ||
@@ -2076,7 +2291,7 @@ int set_param(sym_environment *env, char *line)
 #endif
       return(0);
    }
-   
+
    /***********************************************************************
     ***                      LP parameters                              ***
     ***********************************************************************/
@@ -2107,6 +2322,11 @@ int set_param(sym_environment *env, char *line)
    else if (strcmp(key, "fastmip") == 0 ||
 	    strcmp(key, "LP_fastmip") == 0){
       READ_INT_PAR(lp_par->fastmip);
+      return(0);
+   }
+   else if (strcmp(key, "should_warmstart_chain") == 0 ||
+	    strcmp(key, "LP_should_warmstart_chain") == 0){
+      READ_INT_PAR(lp_par->should_warmstart_chain);
       return(0);
    }
    else if (strcmp(key, "try_to_recover_from_error") == 0 ||
@@ -2233,6 +2453,11 @@ int set_param(sym_environment *env, char *line)
       READ_DBL_PAR(lp_par->tailoff_absolute);
       return(0);
    }
+   else if (strcmp(key, "tailoff_max_no_iterative_impr_iters_root") == 0 ||
+	    strcmp(key, "LP_tailoff_max_no_iterative_impr_iters_root") == 0){
+      READ_INT_PAR(lp_par->tailoff_max_no_iterative_impr_iters_root);
+      return(0);
+   }
    
    else if (strcmp(key, "ineff_cnt_to_delete") == 0 ||
 	    strcmp(key, "LP_ineff_cnt_to_delete") == 0){
@@ -2332,6 +2557,24 @@ int set_param(sym_environment *env, char *line)
       return(0);
    }
    
+   else if (strcmp(key, "max_cut_num_per_iter_root") == 0 ||
+	    strcmp(key, "LP_max_cut_num_per_iter_root") == 0){
+      READ_INT_PAR(lp_par->max_cut_num_per_iter_root);
+      return(0);
+   }
+   
+   else if (strcmp(key, "min_root_cut_rounds") == 0 ||
+	    strcmp(key, "LP_min_root_cut_rounds") == 0){
+      READ_INT_PAR(lp_par->min_root_cut_rounds);
+      return(0);
+   }
+   
+   else if (strcmp(key, "max_cut_length") == 0 ||
+	    strcmp(key, "LP_max_cut_length") == 0){
+      READ_INT_PAR(lp_par->max_cut_length);
+      return(0);
+   }
+
    /* variable fixing parameters */
    else if (strcmp(key, "do_reduced_cost_fixing") == 0 ||
 	    strcmp(key, "LP_do_reduced_cost_fixing") == 0){
@@ -2408,13 +2651,19 @@ int set_param(sym_environment *env, char *line)
 
    else if (strcmp(key, "generate_cgl_twomir_cuts") == 0 ||
 	    strcmp(key, "LP_generate_cgl_twomir_cuts") == 0){
-      READ_INT_PAR(lp_par->cgl.generate_cgl_mir_cuts);
+      READ_INT_PAR(lp_par->cgl.generate_cgl_twomir_cuts);
       return(0);
    }
 
    else if (strcmp(key, "generate_cgl_flow_and_cover_cuts") == 0 ||
 	    strcmp(key, "LP_generate_cgl_flow_and_cover_cuts") == 0){
-      READ_INT_PAR(lp_par->cgl.generate_cgl_flow_and_cover_cuts);
+      READ_INT_PAR(lp_par->cgl.generate_cgl_flowcover_cuts);
+      return(0);
+   }
+
+   else if (strcmp(key, "generate_cgl_flowcover_cuts") == 0 ||
+	    strcmp(key, "LP_generate_cgl_flowcover_cuts") == 0){
+      READ_INT_PAR(lp_par->cgl.generate_cgl_flowcover_cuts);
       return(0);
    }
 
@@ -2432,7 +2681,7 @@ int set_param(sym_environment *env, char *line)
 
    else if (strcmp(key, "generate_cgl_landp_cuts") == 0 ||
 	    strcmp(key, "LP_generate_cgl_landp_cuts") == 0){
-      READ_INT_PAR(lp_par->cgl.generate_cgl_mir_cuts);
+      READ_INT_PAR(lp_par->cgl.generate_cgl_landp_cuts);
       return(0);
    }
 
@@ -2478,9 +2727,9 @@ int set_param(sym_environment *env, char *line)
       return(0);
    }
 
-   else if (strcmp(key, "generate_cgl_flow_and_cover_cuts_freq") == 0 ||
-	    strcmp(key, "LP_generate_cgl_flow_and_cvber_cuts_freq") == 0){
-      READ_INT_PAR(lp_par->cgl.generate_cgl_flow_and_cover_cuts_freq);
+   else if (strcmp(key, "generate_cgl_flowcover_cuts_freq") == 0 ||
+	    strcmp(key, "LP_generate_cgl_flowcover_cuts_freq") == 0){
+      READ_INT_PAR(lp_par->cgl.generate_cgl_flowcover_cuts_freq);
       return(0);
    }
 
@@ -2502,14 +2751,81 @@ int set_param(sym_environment *env, char *line)
       return(0);
    }
 
+    else if (strcmp(key, "gomory_max_depth") == 0 ||
+	    strcmp(key, "LP_gomory_max_depth") == 0){
+      READ_INT_PAR(lp_par->cgl.gomory_max_depth);
+      return(0);
+   }
+
+   else if (strcmp(key, "knapsack_max_depth") == 0 ||
+	    strcmp(key, "LP_knapsack_max_depth") == 0){
+      READ_INT_PAR(lp_par->cgl.knapsack_max_depth);
+      return(0);
+   }
+   
+   else if (strcmp(key, "oddhole_max_depth") == 0 ||
+	    strcmp(key, "LP_oddhole_max_depth") == 0){
+      READ_INT_PAR(lp_par->cgl.oddhole_max_depth);
+      return(0);
+   }
+
+   else if (strcmp(key, "probing_max_depth") == 0 ||
+	    strcmp(key, "LP_probing_max_depth") == 0){
+      READ_INT_PAR(lp_par->cgl.probing_max_depth);
+      return(0);
+   }
+
+   else if (strcmp(key, "clique_max_depth") == 0 ||
+	    strcmp(key, "LP_clique_max_depth") == 0){
+      READ_INT_PAR(lp_par->cgl.clique_max_depth);
+      return(0);
+   }
+
+   else if (strcmp(key, "twomir_max_depth") == 0 ||
+	    strcmp(key, "LP_twomir_max_depth") == 0){
+      READ_INT_PAR(lp_par->cgl.twomir_max_depth);
+      return(0);
+   }
+
+   else if (strcmp(key, "flowcover_max_depth") == 0 ||
+	    strcmp(key, "LP_flowcover_max_depth") == 0){
+      READ_INT_PAR(lp_par->cgl.flowcover_max_depth);
+      return(0);
+   }
+
+   else if (strcmp(key, "max_chain_backtrack") == 0 ||
+	    strcmp(key, "LP_max_chain_backtrack") == 0){
+      READ_INT_PAR(lp_par->cgl.max_chain_backtrack);
+      return(0);
+   }
+
+   else if (strcmp(key, "max_chain_trial_num") == 0 ||
+	    strcmp(key, "LP_max_chain_trial_num") == 0){
+      READ_INT_PAR(lp_par->cgl.max_chain_trial_num);
+      return(0);
+   }
+   
+   else if (strcmp(key, "chain_trial_freq") == 0 ||
+	    strcmp(key, "chain_trial_freq") == 0){
+      READ_INT_PAR(lp_par->cgl.chain_trial_freq);
+      return(0);
+   }
+   
+   else if (strcmp(key, "chain_weighted_gap") == 0 ||
+	    strcmp(key, "LP_chain_weighted_gap") == 0){
+      READ_DBL_PAR(lp_par->cgl.chain_weighted_gap);
+      return(0);
+   }
+
    else if (strcmp(key, "max_presolve_iter") == 0 ||
 	    strcmp(key, "LP_max_presolve_iter") == 0){
       READ_INT_PAR(lp_par->max_presolve_iter);
+      lp_par->user_set_max_presolve_iter = TRUE;
       return(0);
    }
    
    /* user-defined function defaults */
-   else if (strcmp(key, "is_feasible_default") == 0 ||
+   if (strcmp(key, "is_feasible_default") == 0 ||
 	    strcmp(key, "LP_is_feasible_default") == 0){
       READ_INT_PAR(lp_par->is_feasible_default);
       return(0);
@@ -2538,6 +2854,7 @@ int set_param(sym_environment *env, char *line)
       READ_INT_PAR(lp_par->strong_branching_cand_num_max);
       lp_par->strong_branching_cand_num_min =
 	 lp_par->strong_branching_cand_num_max;
+      lp_par->user_set_strong_branching_cand_num = TRUE;
       lp_par->strong_branching_red_ratio = 0;
       return(0);
    }
@@ -2551,13 +2868,38 @@ int set_param(sym_environment *env, char *line)
       READ_INT_PAR(lp_par->strong_branching_cand_num_min);
       return(0);
    }
+   else if (strcmp(key, "strong_br_min_level") == 0) {
+      READ_INT_PAR(lp_par->strong_br_min_level);
+      return(0);
+   }
+   else if (strcmp(key, "strong_br_all_candidates_level") == 0) {
+      READ_INT_PAR(lp_par->strong_br_all_candidates_level);
+      return(0);
+   }
    else if (strcmp(key,"strong_branching_red_ratio") == 0 ||
 	    strcmp(key,"LP_strong_branching_red_ratio") == 0){
       READ_DBL_PAR(lp_par->strong_branching_red_ratio);
       return(0);
    }
+   else if (strcmp(key,"strong_branching_high_low_weight") == 0 ||
+	    strcmp(key,"LP_strong_branching_high_low_weight") == 0){
+      READ_DBL_PAR(lp_par->strong_branching_high_low_weight);
+      return(0);
+   }
    else if (strcmp(key,"use_hot_starts") == 0) {
       READ_INT_PAR(lp_par->use_hot_starts);
+      return(0);
+   }
+   else if (strcmp(key,"should_use_rel_br") == 0) {
+      READ_INT_PAR(lp_par->should_use_rel_br);
+      return(0);
+   }
+   else if (strcmp(key,"rel_br_threshold") == 0) {
+      READ_INT_PAR(lp_par->rel_br_threshold);
+      return(0);
+   }
+   else if (strcmp(key,"rel_br_cand_threshold") == 0) {
+      READ_INT_PAR(lp_par->rel_br_cand_threshold);
       return(0);
    }
    else if (strcmp(key, "compare_candidates_default") == 0 ||
@@ -2612,6 +2954,38 @@ int set_param(sym_environment *env, char *line)
       READ_DBL_PAR(lp_par->mc_rho);
       return(0);
    }
+   else if (strcmp(key, "fp_enabled") == 0) {
+      READ_INT_PAR(lp_par->fp_enabled);
+      return(0);
+   }
+   else if (strcmp(key, "fp_frequency") == 0) {
+      READ_INT_PAR(lp_par->fp_frequency);
+      return(0);
+   }
+   else if (strcmp(key, "fp_max_cycles") == 0) {
+      READ_INT_PAR(lp_par->fp_max_cycles);
+      return(0);
+   }
+   else if (strcmp(key, "fp_time_limit") == 0) {
+      READ_DBL_PAR(lp_par->fp_time_limit);
+      return(0);
+   }
+   else if (strcmp(key, "fp_display_interval") == 0) {
+      READ_DBL_PAR(lp_par->fp_display_interval);
+      return(0);
+   }
+   else if (strcmp(key, "fp_flip_fraction") == 0) {
+      READ_DBL_PAR(lp_par->fp_flip_fraction);
+      return(0);
+   }
+   else if (strcmp(key, "fp_max_initial_time") == 0) {
+      READ_DBL_PAR(lp_par->fp_max_initial_time);
+      return(0);
+   }
+   else if (strcmp(key, "fp_min_gap") == 0) {
+      READ_DBL_PAR(lp_par->fp_min_gap);
+      return(0);
+   }
 
    /***********************************************************************
     ***                     cut_gen parameters                          ***
@@ -2629,7 +3003,7 @@ int set_param(sym_environment *env, char *line)
    /***********************************************************************
     ***                      cutpool parameters                         ***
     ***********************************************************************/
-   else if (strcmp(key, "CP_verbosity") == 0){
+   if (strcmp(key, "CP_verbosity") == 0){
       READ_INT_PAR(cp_par->verbosity);
       return(0);
    }
@@ -2681,6 +3055,83 @@ int set_param(sym_environment *env, char *line)
    else if (strcmp(key, "check_which") == 0 ||
 	       strcmp(key, "CP_check_which") == 0){
       READ_INT_PAR(cp_par->check_which);
+      return(0);
+   }
+
+   /*************************************************************************
+    ***                     preprocessing - parameters                    ***
+    *************************************************************************/ 
+
+   if (strcmp(key, "prep_level") == 0){
+      READ_INT_PAR(prep_par->level);
+      return(0);
+   }
+   else if (strcmp(key, "prep_dive_level") == 0){
+      READ_INT_PAR(prep_par->dive_level);
+      return(0);
+   }
+   else if (strcmp(key, "prep_impl_dive_level") == 0){
+      READ_INT_PAR(prep_par->impl_dive_level);
+      return(0);
+   }
+   else if (strcmp(key, "prep_impl_limit") == 0){
+      READ_INT_PAR(prep_par->impl_limit);
+      return(0);
+   }
+   else if (strcmp(key, "prep_iter_limit") == 0){
+      READ_INT_PAR(prep_par->iteration_limit);
+      return(0);
+   }
+   else if (strcmp(key, "prep_do_probing") == 0){
+      READ_INT_PAR(prep_par->do_probe);
+      return(0);
+   }
+   else if (strcmp(key, "prep_do_sr") == 0){
+      READ_INT_PAR(prep_par->do_single_row_rlx);
+      return(0);
+   }
+   else if (strcmp(key, "prep_verbosity") == 0){
+      READ_INT_PAR(prep_par->verbosity);
+      return(0);
+   }
+   else if (strcmp(key, "prep_reduce_mip") == 0){
+      READ_INT_PAR(prep_par->reduce_mip);
+      return(0);
+   }
+   else if (strcmp(key, "prep_probing_verbosity") == 0){
+      READ_INT_PAR(prep_par->probe_verbosity);
+      return(0);
+   }
+   else if (strcmp(key, "prep_probing_level") == 0){
+      READ_INT_PAR(prep_par->probe_level);
+      return(0);
+   }
+   else if (strcmp(key, "prep_display_stats") == 0){
+      READ_INT_PAR(prep_par->display_stats);
+      return(0);
+   }
+   else if (strcmp(key, "max_sr_cnt") == 0){
+      READ_INT_PAR(prep_par->max_sr_cnt);
+      return(0);
+   }
+   else if (strcmp(key, "max_aggr_row_cnt") == 0){
+      READ_INT_PAR(prep_par->max_aggr_row_cnt);
+      return(0);
+   }
+   else if (strcmp(key, "keep_row_ordered") == 0){
+      READ_INT_PAR(prep_par->keep_row_ordered);
+      return(0);
+   }
+   else if (strcmp(key, "write_mps") == 0){
+      READ_INT_PAR(prep_par->write_mps);
+      return(0);
+   }
+   else if (strcmp(key, "write_lp") == 0){
+      READ_INT_PAR(prep_par->write_lp);
+      return(0);
+   }
+   else if (strcmp(key, "prep_time_limit") == 0){
+      READ_INT_PAR(prep_par->time_limit);
       return(0);
    }
 
@@ -2743,7 +3194,7 @@ MIPdesc *create_copy_mip_desc(MIPdesc * mip)
    if (mip){
       mip_copy = (MIPdesc*) calloc(1, sizeof(MIPdesc));
       memcpy(mip_copy, mip, sizeof(MIPdesc));
-      
+
       if (mip->n){
 	 mip_copy->obj       = (double *) malloc(DSIZE * mip_copy->n);
 
@@ -2785,6 +3236,12 @@ MIPdesc *create_copy_mip_desc(MIPdesc * mip)
 	 memcpy(mip_copy->matind, mip->matind, ISIZE * mip_copy->nz);  
       }
 
+      /* will not be used anywhere other than presolve where they are
+	 always initialized */
+      mip_copy->mip_inf = 0;
+      mip->cru_vars = 0;
+      mip->orig_sense = 0;
+      mip->orig_ind = 0;
 #if 0
       if (mip->row_matbeg){
 	 mip_copy->row_matbeg  = (int *) malloc(ISIZE * (mip_copy->m + 1));
@@ -2813,7 +3270,12 @@ MIPdesc *create_copy_mip_desc(MIPdesc * mip)
 	       mip_copy->colname[i][19] = 0;
 	    }
 	 }
-      }      
+      }
+
+      if(mip->fixed_n){
+	 memcpy(mip_copy->fixed_ind, mip->fixed_ind, ISIZE*mip->fixed_n);
+	 memcpy(mip_copy->fixed_val, mip->fixed_val, DSIZE*mip->fixed_n);
+      }
    }
    else{
       printf("create_copy_mip_desc():");
@@ -2844,12 +3306,10 @@ sym_environment *create_copy_environment (sym_environment *env)
       return(NULL);
    }
    env_copy = (sym_environment*) calloc(1, sizeof(sym_environment));
-
-  /* no need for this */
-   /* initialize_u(env_copy);*/
-
    memcpy(env_copy, env, sizeof(sym_environment));
    
+   //   initialize_u(env_copy);
+
    /* Note that, if some modifications on the user function have been done
       after initialization, it will not be reflected here, since SYMPHONY
       doesn't know anoything about the user structure! For a temporary 
@@ -2912,7 +3372,15 @@ sym_environment *create_copy_environment (sym_environment *env)
 
    /* copy mip */
    if (env->mip){
-      env_copy->mip = create_copy_mip_desc(env->mip);
+      //free_mip_desc(env_copy->mip);
+      if(env->prep_mip){
+	 env_copy->prep_mip = create_copy_mip_desc(env->prep_mip);
+	 env_copy->orig_mip = create_copy_mip_desc(env->orig_mip);
+	 env_copy->mip = env_copy->orig_mip;
+      }else{
+	 env_copy->mip = create_copy_mip_desc(env->mip);
+	 env_copy->prep_mip = env_copy->orig_mip = 0;
+      }
    }
 
    /*========================================================================*/
@@ -2962,6 +3430,30 @@ sym_environment *create_copy_environment (sym_environment *env)
 	 desc->desc = (char*) malloc(desc->desc_size*CSIZE);
 	 memcpy(desc->desc, env->rootdesc->desc, 
 		desc->desc_size*CSIZE);   
+      }
+
+      if(desc->bnd_change){
+	 desc->bnd_change = (bounds_change_desc *)
+	    calloc(sizeof(bounds_change_desc),1);
+	 if(env->rootdesc->bnd_change->num_changes){
+	    desc->bnd_change->index =(int *)malloc
+	       (ISIZE *env->rootdesc->bnd_change->num_changes);
+	    desc->bnd_change->lbub =(char *)malloc
+	       (CSIZE *env->rootdesc->bnd_change->num_changes);
+	    desc->bnd_change->value =(double *)malloc
+	       (DSIZE *env->rootdesc->bnd_change->num_changes);
+	    memcpy(desc->bnd_change->index,
+		   env->rootdesc->bnd_change->index,
+		   ISIZE *env->rootdesc->bnd_change->num_changes);
+	    memcpy(desc->bnd_change->lbub,
+		   env->rootdesc->bnd_change->lbub,
+		   CSIZE *env->rootdesc->bnd_change->num_changes);
+	    memcpy(desc->bnd_change->value,
+		   env->rootdesc->bnd_change->value,
+		   DSIZE *env->rootdesc->bnd_change->num_changes);
+	 }
+	 desc->bnd_change->num_changes =
+	    env->rootdesc->bnd_change->num_changes;
       }
    }
 
@@ -3477,4 +3969,7 @@ int trim_warm_tree(sym_environment *env, bc_node *n)
    }
    return(0);
 }
+
+/*===========================================================================*/
+/*===========================================================================*/
 

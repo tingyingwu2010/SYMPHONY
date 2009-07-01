@@ -6,7 +6,7 @@
 /*                                                                           */
 /* (c) Copyright 2000-2007 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
-/* This application was developed by Ted Ralphs (tkralphs@lehigh.edu)        */
+/* This application was developed by Ted Ralphs (ted@lehigh.edu)             */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -43,6 +43,21 @@ int is_same_edge(const void *ed0, const void *ed1)
 
 /*===========================================================================*/
 
+/*__BEGIN_EXPERIMENTAL_SECTION__*/
+#if 0
+/* This comparison function can be used to sort lexicographically */
+/*===========================================================================*/
+
+int is_same_edge(const void *ed0, const void *ed1)
+{
+   return(((edge_data *)ed0)->v0 - ((edge_data *)ed1)->v0 ?
+	  ((edge_data *)ed0)->v0 - ((edge_data *)ed1)->v0 :
+	  ((edge_data *)ed0)->v1 - ((edge_data *)ed1)->v1);
+}
+
+/*===========================================================================*/
+#endif
+/*__END_EXPERIMENTAL_SECTION__*/
 void delete_dup_edges(small_graph *g)
 {
    edge_data *ed0, *ed1;

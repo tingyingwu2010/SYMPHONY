@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -163,7 +163,7 @@ cut_data *create_explicit_cut(int nzcnt, int *indices, double *values,
    cut->sense = sense;
    cut->rhs = rhs;
    cut->range = range;
-   cut->size = ISIZE + nzcnt * (ISIZE + DSIZE);
+   cut->size = (int)(ISIZE + nzcnt * (ISIZE + DSIZE));
    cut->coef = (char *) malloc (cut->size);
    ((int *) cut->coef)[0] = nzcnt;
    memcpy(cut->coef + ISIZE, (char *)indices, nzcnt*ISIZE);
@@ -188,7 +188,7 @@ int cg_add_explicit_cut(int nzcnt, int *indices, double *values,
    cut->sense = sense;
    cut->rhs = rhs;
    cut->range = range;
-   cut->size = ISIZE + nzcnt * (ISIZE + DSIZE);
+   cut->size = (int)(ISIZE + nzcnt * (ISIZE + DSIZE));
    cut->coef = (char *) malloc (cut->size);
    ((int *) cut->coef)[0] = nzcnt;
    memcpy(cut->coef + ISIZE, (char *)indices, nzcnt*ISIZE);

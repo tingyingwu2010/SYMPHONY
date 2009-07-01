@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -24,6 +24,7 @@
 #include "sym_lp_params.h"
 #include "sym_master.h"
 #include "sym_master_u.h"
+#undef SHOULD_SHOW_MEMORY_USAGE
 
 /*===========================================================================*/
 
@@ -39,10 +40,11 @@ void usage(void)
    printf("master [ -hagrtbd ] [ -u ub ] [ -p procs ] [ -n rule ]\n\t"
 	  "[ -v level ] [ -s cands ] [ -c rule ] [ -k rule ] \n\t"
 	  "[ -m max ] [ -l pools ] [ -i iters ] "
-	  "[ -f parameter_file_name ] [-j 0/1]"
+	  "[ -f parameter_file_name ] [-j 0/1] \n\t"
+	  "[-o tree_out_file]"
 	  "\n\n\t%s\n\t%s\n\t%s\n\t%s\n\t%s\n\t%s\n\t%s\n\t%s\n"
 	  "\t%s\n\t%s\n\t%s\n\t%s\n\t%s\n\t%s\n\t%s\n\t%s\n\t%s\n"
-	  "\t%s\n\t%s\n\t%s\n\t%s\n\n",
+	  "\t%s\n\t%s\n\t%s\n\t%s\n\t%s\n\n",
 	  "-h: help",
 	  "-a: no cut timeout",
 	  "-d: enable graph drawing",
@@ -63,7 +65,8 @@ void usage(void)
 	  "-i n: allow a max of 'n' iterations in presolve",
 	  "-f file: read parameters from parameter file 'file'",
 	  "-j 0/1: whether or not to generate cgl cuts",
-	  "-z n: set diving threshold to 'n'");
+	  "-z n: set diving threshold to 'n'",
+	  "-o file: output vbc-like tree information to file 'file'");
    printf("Solver-specific switches:\n\n");
 #ifdef USE_SYM_APPLICATION
    user_usage();
@@ -83,8 +86,8 @@ void version(void)
 {
    printf("\n");
    printf("*******************************************************\n");
-   printf("*   This is SYMPHONY Version 5.1.8                    *\n");
-   printf("*   Copyright 2000-2008 Ted Ralphs and others         *\n");
+   printf("*   This is SYMPHONY Version 5.2.0                    *\n");
+   printf("*   Copyright 2000-2009 Ted Ralphs and others         *\n");
    printf("*   All Rights Reserved.                              *\n");
    printf("*   Distributed under the Common Public License 1.0   *\n");
    printf("*******************************************************\n");
@@ -275,7 +278,8 @@ int parse_command_line(sym_environment *env, int argc, char **argv)
       }
       else if (strcmp(key, "vbc_emulation") == 0 ||
 	       strcmp(key, "TM_vbc_emulation") == 0){
-	 if (tm_par->vbc_emulation == VBC_EMULATION_FILE){
+	 if (tm_par->vbc_emulation == VBC_EMULATION_FILE || 
+	       tm_par->vbc_emulation == VBC_EMULATION_FILE_NEW){
 	    if (fgets(line, MAX_LINE_LENGTH, f) == NULL){
 	       printf("No vbc emulation file!\n\n");
 	       return(ERROR__PARSING_PARAM_FILE);
@@ -295,6 +299,9 @@ int parse_command_line(sym_environment *env, int argc, char **argv)
 	       fprintf(f1, "#BOUNDS: NONE\n");
 	       fprintf(f1, "#INFORMATION: STANDARD\n");
 	       fprintf(f1, "#NODE_NUMBER: NONE\n");
+	       if (tm_par->vbc_emulation == VBC_EMULATION_FILE_NEW) {
+		  fprintf(f1, "# ");
+	       }
 	       fprintf(f1, "00:00:00.00 N 0 1 %i\n", VBC_CAND_NODE);
 	       fclose(f1);
 	    }
@@ -649,6 +656,29 @@ int parse_command_line(sym_environment *env, int argc, char **argv)
 	    printf("Warning: Missing argument to command-line switch -%c\n",c);
 	 }
 	 break;
+       case 'o':
+	 if (i < argc - 1){
+	    sscanf(argv[i+1], "%c", &tmp);
+	    if (tmp== '-') {
+	       printf("Warning: Missing argument to command-line switch -%c\n",
+		      c);
+	    }else{
+	       strncpy(tm_par->vbc_emulation_file_name, argv[i+1], MAX_FILE_NAME_LENGTH);
+	       tm_par->vbc_emulation = VBC_EMULATION_FILE_NEW;
+	       i++;
+	       FILE *f2;
+	       if (!(f2 = fopen(tm_par->vbc_emulation_file_name, "w"))){
+		  printf("\nError opening vbc emulation file\n\n");
+	       }else{
+		  fprintf(f2,"# ");
+		  fprintf(f2, "file created\n");
+		  fclose(f2); 
+	       }
+	    }
+	 }else{
+	    printf("Warning: Missing argument to command-line switch -%c\n",c);
+	 }
+	 break;
        default:
 	 if (c < 'A'){
 	    printf("Warning: Ignoring unrecognized command-line switch -%c\n",
@@ -700,14 +730,14 @@ void read_string(char *target, char *line, int maxlen)
 
    if (value[0] != '"'){ /* the string is not quoted */
       quote1 = value;
-      len = strlen(quote1);
+      len = (int)strlen(quote1);
    }else{ /* the string is quoted */
       quote1 = strchr(line, '"');
       quote2 = strrchr(line,'"');
       if (quote1 == quote2)
 	 READPAR_ERROR(key);
       quote1++;
-      len = quote2 - quote1;
+      len = (int)(quote2 - quote1);
    }
    
    if (len > maxlen)
@@ -722,10 +752,11 @@ void read_string(char *target, char *line, int maxlen)
 /*===========================================================================*/
 /*===========================================================================*/
 
-void print_statistics(node_times *tim, problem_stat *stat, double ub,
+void print_statistics(node_times *tim, problem_stat *stat, 
+                      lp_stat_desc *lp_stat, double ub,
 		      double lb, double initial_time, double start_time,
 		      double finish_time, double obj_offset, char obj_sense, 
-		      char has_ub)
+		      int has_ub, sp_desc *solpool)
 {
    double gap = 0.0;
 
@@ -740,11 +771,13 @@ void print_statistics(node_times *tim, problem_stat *stat, double ub,
 
    initial_time += tim->communication;
    initial_time += tim->lp;
+   initial_time += tim->lp_setup;
    initial_time += tim->separation;
    initial_time += tim->fixing;
    initial_time += tim->pricing;
    initial_time += tim->strong_branching;
    initial_time += tim->cut_pool;
+   initial_time += tim->primal_heur;
 #if !defined(_MSC_VER)  /* FIXME: CPU timing doesn't work in Windows */
    printf("======================= CP Timing ===========================\n");
    printf("  Cut Pool                  %.3f\n", tim->cut_pool);
@@ -752,10 +785,13 @@ void print_statistics(node_times *tim, problem_stat *stat, double ub,
    printf("====================== LP/CG Timing =========================\n");
 #if !defined(_MSC_VER)  /* FIXME: CPU timing doesn't work in Windows */
    printf("  LP Solution Time          %.3f\n", tim->lp);
+   printf("  LP Setup Time             %.3f\n", tim->lp_setup);
    printf("  Variable Fixing           %.3f\n", tim->fixing);
    printf("  Pricing                   %.3f\n", tim->pricing);
    printf("  Strong Branching          %.3f\n", tim->strong_branching);
    printf("  Separation                %.3f\n", tim->separation); 
+   printf("  Primal Heuristics         %.3f\n", tim->primal_heur); 
+   printf("  Communication             %.3f\n", tim->communication);
 #ifndef COMPILE_IN_LP
    printf("=================== Parallel Overhead ======================\n");
    printf("  Communication         %.3f\n", tim->communication);
@@ -777,6 +813,14 @@ void print_statistics(node_times *tim, problem_stat *stat, double ub,
    printf("Number of analyzed nodes:       %i\n", stat->analyzed);
    printf("Depth of tree:                  %i\n", stat->max_depth);
    printf("Size of the tree:               %i\n", stat->tree_size);
+   if (solpool) {
+      printf("Number of solutions found:      %i\n", solpool->total_num_sols_found);
+      printf("Number of solutions in pool:    %i\n", solpool->num_solutions);
+   }
+#ifdef SHOULD_SHOW_MEMORY_USAGE
+   printf("Virtual memory used (MB):       %.2f\n", stat->max_vsize);
+#endif
+
 #if 0
    printf("Leaves before trimming:         %i\n",
 	  stat->leaves_before_trimming);
@@ -798,6 +842,129 @@ void print_statistics(node_times *tim, problem_stat *stat, double ub,
       }
    }
 
+   if (lp_stat) {
+      printf ("\n======================= LP Solver =========================");
+      printf ("\n");
+      printf ("Number of times LP solver called:               "
+              "%i\n",lp_stat->lp_calls);
+      printf ("Number of calls from feasibility pump:          "
+              "%i\n",lp_stat->fp_lp_calls);
+      printf ("Number of calls from strong branching:          "
+              "%i\n",lp_stat->str_br_lp_calls);
+      printf ("Number of solutions found by LP solve:          "
+              "%i\n",lp_stat->lp_sols);
+      printf ("Number of bounds changed by strong branching:   "
+              "%i\n",lp_stat->str_br_bnd_changes);
+      printf ("Number of nodes pruned by strong branching:     "
+              "%i\n",lp_stat->str_br_nodes_pruned);
+
+      printf ("\n==================== Feasibility Pump =====================");
+      printf ("\n");
+      printf ("Number of times feasibility pump called:        ");
+      printf("%i\n", lp_stat->fp_calls);
+      printf ("Number of solutions found by feasibility pump:  ");
+      printf("%i\n", lp_stat->fp_num_sols);
+      printf ("Time spent in feasibility pump:                 %.2f\n", 
+            tim->fp); 
+
+      printf ("\n=========================== Cuts ==========================");
+      printf ("\n");
+      printf ("total cuts accepted:                   %d\n",
+            lp_stat->cuts_generated);
+      printf ("total cuts added to LPs:               %d\n",
+            lp_stat->cuts_added_to_lps);
+      printf ("total cuts deleted from LPs:           %d\n",
+            lp_stat->cuts_deleted_from_lps);
+      printf ("total gomory cuts generated:           %d\n",
+            lp_stat->gomory_cuts);
+      printf ("total knapsack cuts generated:         %d\n",
+            lp_stat->knapsack_cuts);
+      printf ("total oddhole cuts generated:          %d\n",
+            lp_stat->oddhole_cuts);
+      printf ("total clique cuts generated:           %d\n",
+            lp_stat->clique_cuts);
+      printf ("total probing cuts generated:          %d\n",
+            lp_stat->probing_cuts);
+      printf ("total mir cuts generated:              %d\n",
+            lp_stat->mir_cuts);
+      printf ("total twomir cuts generated:           %d\n",
+            lp_stat->twomir_cuts);
+      printf ("total flow and cover cuts generated:   %d\n",
+            lp_stat->flowcover_cuts);
+      printf ("total rounding cuts generated:         %d\n",
+            lp_stat->rounding_cuts);
+      printf ("total lift and project cuts generated: %d\n",
+            lp_stat->lift_and_project_cuts);
+      printf ("total landp cuts generated:            %d\n",
+            lp_stat->landp_cuts);
+     
+      printf ("\n");
+
+      printf ("cuts removed because of bad coeffs:    %d\n",
+            lp_stat->num_poor_cuts);
+      printf ("cuts removed because of duplicacy:     %d\n",
+            lp_stat->num_duplicate_cuts);
+      printf ("insufficiently violated cuts:          %d\n",
+            lp_stat->num_unviolated_cuts);
+      
+      printf ("\n");
+
+      printf ("cuts in root:                          %d\n",
+            lp_stat->cuts_root);
+      printf ("gomory cuts in root:                   %d\n",
+            lp_stat->gomory_cuts_root);
+      printf ("knapsack cuts in root:                 %d\n",
+            lp_stat->knapsack_cuts_root);
+      printf ("oddhole cuts in root:                  %d\n",
+            lp_stat->oddhole_cuts_root);
+      printf ("clique cuts in root:                   %d\n",
+            lp_stat->clique_cuts_root);
+      printf ("probing cuts in root:                  %d\n",
+            lp_stat->probing_cuts_root);
+      printf ("mir cuts in root:                      %d\n",
+            lp_stat->mir_cuts_root);
+      printf ("twomir cuts in root:                   %d\n",
+            lp_stat->twomir_cuts_root);
+      printf ("flow and cover cuts in root:           %d\n",
+            lp_stat->flowcover_cuts_root);
+      printf ("rounding cuts in root:                 %d\n",
+            lp_stat->rounding_cuts_root);
+      printf ("lift and project cuts in root:         %d\n",
+            lp_stat->lift_and_project_cuts_root);
+      printf ("landp cuts in root:                    %d\n",
+            lp_stat->landp_cuts_root);
+     
+      printf ("\n");
+      
+      printf ("time in cut generation: %.2f\n", tim->cuts);
+      printf ("time in gomory cuts in %d calls: %.2f\n", 
+            lp_stat->gomory_calls, tim->gomory_cuts);
+      printf ("time in knapsack cuts in %d calls: %.2f\n",
+            lp_stat->knapsack_calls, tim->knapsack_cuts);
+      printf ("time in oddhole cuts in %d calls: %.2f\n", 
+            lp_stat->oddhole_calls, tim->oddhole_cuts);
+      printf ("time in clique cuts in %d calls: %.2f\n", 
+            lp_stat->clique_calls, tim->clique_cuts);
+      printf ("time in probing cuts in %d calls: %.2f\n", 
+            lp_stat->probing_calls, tim->probing_cuts);
+      printf ("time in mir cuts in %d calls: %.2f\n", 
+            lp_stat->mir_calls, tim->mir_cuts);
+      printf ("time in twomir cuts in %d calls: %.2f\n", 
+            lp_stat->twomir_calls, tim->twomir_cuts);
+      printf ("time in flow and cover cuts in %d calls: %.2f\n",
+            lp_stat->flowcover_calls, tim->flowcover_cuts);
+      printf ("time in rounding cuts in %d calls: %.2f\n",
+            lp_stat->rounding_calls, tim->rounding_cuts);
+      printf ("time in lift and project cuts in %d calls: %.2f\n",
+            lp_stat->lift_and_project_calls, tim->lift_and_project_cuts);
+      printf ("time in landp cuts in %d calls: %.2f\n", 
+            lp_stat->landp_calls, tim->landp_cuts);
+      printf ("time in redsplit cuts in %d calls: %.2f\n", 
+            lp_stat->redsplit_calls, tim->redsplit_cuts);
+      printf ("time in checking quality and adding: %.2f\n", 
+            tim->dupes_and_bad_coeffs_in_cuts);
+     
+   }
    if (has_ub){
      gap = fabs(100*(ub-lb)/ub);
    }
@@ -812,8 +979,8 @@ void print_statistics(node_times *tim, problem_stat *stat, double ub,
      }
    }else{
      if (gap > 1e-07){
-       printf("\nCurrent Upper Bound:         %.3f", ub + obj_offset);
-       printf("\nCurrent Lower Bound:         %.3f", lb + obj_offset);
+       printf("\nCurrent Upper Bound:         %.6f", ub + obj_offset);
+       printf("\nCurrent Lower Bound:         %.6f", lb + obj_offset);
        printf("\nGap Percentage:              %.2f\n", gap);
      } else if (!has_ub){
        printf("\nCurrent Lower Bound:         %.3f\n", lb + obj_offset);

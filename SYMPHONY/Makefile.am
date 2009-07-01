@@ -2,12 +2,12 @@
 #                                                                           #
 # This file is part of the SYMPHONY MILP Solver Framework.                  #
 #                                                                           #
-# SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    #
+# SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         #
 # Laci Ladanyi (ladanyi@us.ibm.com).                                        #
 #                                                                           #
 # The author of this file is Menal Guzelsoy                                 #
 #                                                                           #
-# (c) Copyright 2006-2008 Lehigh University. All Rights Reserved.           #
+# (c) Copyright 2006-2009 Lehigh University. All Rights Reserved.           #
 #                                                                           #
 # This software is licensed under the Common Public License. Please see     #
 # accompanying file for terms.                                              #
@@ -78,10 +78,10 @@ addlibsfile = sym_addlibs.txt
 addlibsdir = $(prefix)/share/doc/coin/$(PACKAGE_NAME)
 
 install-exec-local: install-doc
-	$(install_sh_DATA) $(addlibsfile) $(addlibsdir)/$(addlibsfile)
+	$(install_sh_DATA) $(addlibsfile) $(DESTDIR)$(addlibsdir)/$(addlibsfile)
 
 uninstall-local: uninstall-doc
-	rm -f $(addlibsdir)/$(addlibsfile)
+	rm -f $(DESTDIR)$(addlibsdir)/$(addlibsfile)
 
 ########################################################################
 #                         Maintainer Stuff                             #

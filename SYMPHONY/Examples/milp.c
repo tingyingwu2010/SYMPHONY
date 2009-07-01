@@ -2,7 +2,7 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
 /* The author of this file is Menal Guzelsoy                                 */
@@ -26,8 +26,8 @@ int main(int argc, char **argv)
    sym_load_problem(env);
    
    sym_solve(env);
-   
+
    sym_close_environment(env);
-  
+   
    return(0);
 }  

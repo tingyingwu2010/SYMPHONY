@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -131,7 +131,11 @@ void add_col_set(lp_prob *p, our_col_set *new_cols)
    /* zero out x, i.e., set it to the LB */
    memset(lp_data->x + oldn, 0, new_vars * DSIZE);
    /* set status of the new vars to NOT_FIXED */
-   memset(lp_data->status + oldn, NOT_FIXED, new_vars);
+   //memset(lp_data->status + oldn, NOT_FIXED, new_vars);
+   //TODO: char vs int
+   for (i = oldn; i<oldn+new_vars; i++) {
+      lp_data->status[i] = NOT_FIXED;
+   }
 }
 
 /*===========================================================================*/
@@ -157,9 +161,9 @@ void tighten_bounds(lp_prob *p)
    int del_vars = 0, *delstat = NULL;
 
    //char not_fixed__lb__switch, not_fixed__ub__switch;
-   int *ind;
-   char *lu;
-   double *bd, *ub, *lb;
+   int *ind = 0;
+   char *lu = 0;
+   double *bd = 0, *ub = 0, *lb = 0;
    int cnt = 0;
 
    colind_sort_extra(p);
@@ -180,7 +184,6 @@ void tighten_bounds(lp_prob *p)
     * -- if we haven't done rc tightening before, then the gap must be relatively
     * small compared to the upper bound
     \*=======================================================================*/
-
    if (p->par.do_reduced_cost_fixing && p->has_ub && gap > 0){
       if (p->last_gap == 0.0 ?
 	  (gap < p->par.gap_as_ub_frac * p->ub) :
@@ -216,6 +219,8 @@ void tighten_bounds(lp_prob *p)
 	       lu[cnt] = 'U';
 	       bd[cnt++] = vars[i]->is_int ? floor(lb[i] + max_change) :
 		  lb[i] + max_change;
+               vars[i]->new_ub = bd[cnt-1];
+               p->bound_changes_in_iter++;
 	       if (! (status[i] & NOT_REMOVABLE) && lb[i] == 0 &&
 		   lb[i] == ub[i]){
 		  p->vars_deletable++;
@@ -233,6 +238,8 @@ void tighten_bounds(lp_prob *p)
 	       lu[cnt] = 'L';
 	       bd[cnt++] = vars[i]->is_int ? ceil(ub[i] + max_change) :
 		  ub[i] + max_change;
+               vars[i]->new_lb = bd[cnt-1];
+               p->bound_changes_in_iter++;
 	       if (! (status[i] & NOT_REMOVABLE) && lb[i] == 0 &&
 		   lb[i] == ub[i]){
 		  p->vars_deletable++;
@@ -245,6 +252,17 @@ void tighten_bounds(lp_prob *p)
 	 p->vars_recently_fixed_to_ub += vars_recently_fixed_to_ub;
       }
    }
+
+#ifdef COMPILE_IN_LP
+   if (p->bc_level==0 && p->par.do_reduced_cost_fixing) {
+      /* we are root node. we will save the reduced costs after each round of
+       * cuts. whenever ub is updated, we can come back and update bounds in
+       * the root
+       */
+      save_root_reduced_costs(p); 
+   }
+#endif
+
    if (cnt > 0){
       change_bounds(lp_data, cnt, ind, lu, bd);
    }
@@ -365,7 +383,7 @@ our_col_set *price_all_vars(lp_prob *p)
    int next_not_fixed, not_fixed_num = lp_data->not_fixed_num;
    int *not_fixed = lp_data->not_fixed;
    char new_nf_status = NF_CHECK_UNTIL_LAST;
-   char nf_status = lp_data->nf_status;
+   int  nf_status = lp_data->nf_status;
    int tmp_not_fixed_num = 0, *tmp_not_fixed, *itmp;
 
    int cutnum;
@@ -764,7 +782,7 @@ int restore_lp_feasibility(lp_prob *p, our_col_set *new_cols)
    var_desc **extra = vars + bvarnum;
 
    int next_not_fixed, *not_fixed = lp_data->not_fixed;
-   char nf_status = lp_data->nf_status;
+   int  nf_status = lp_data->nf_status;
    int not_fixed_num = lp_data->not_fixed_num;
 
    int cutnum;
@@ -1022,3 +1040,235 @@ int var_cind_comp(const void *v0, const void *v1)
 {
    return((*(var_desc **)v0)->colind - (*(var_desc **)v1)->colind);
 }
+
+
+/*===========================================================================*/
+#ifdef COMPILE_IN_LP
+int save_root_reduced_costs(lp_prob *p)
+{
+   int         *indices;
+   double      *values, *lb, *ub;
+   tm_prob     *tm      = p->tm;
+   rc_desc     *rc = NULL;
+   int          pos;
+   int         *tind = p->lp_data->tmp.i1;
+   int          cnt = 0, i, j;
+   int          n = p->lp_data->n;
+   var_desc   **vars = p->lp_data->vars;
+   double       lpetol = p->lp_data->lpetol;
+   double      *lp_lb, *lp_ub;
+   double      *dj = p->lp_data->dj;
+
+   get_bounds(p->lp_data);
+   lp_lb = p->lp_data->lb;
+   lp_ub = p->lp_data->ub;
+   for (i = 0; i < n; i++){
+      if (vars[i]->is_int && lp_ub[i]-lp_lb[i]>lpetol &&
+            (dj[i] > lpetol || dj[i] < -lpetol)){
+         tind[cnt] = i;
+         cnt++;
+      }
+   }
+   PRINT(p->par.verbosity, 5, ("there are %d non zero reduced costs for "
+            "integer vars\n", cnt));
+
+   if (cnt==0) {
+      return 0;
+   }
+   indices = (int *)malloc(cnt*ISIZE);
+   values = (double *)malloc(cnt*DSIZE);
+   lb = (double *)malloc(cnt*DSIZE);
+   ub = (double *)malloc(cnt*DSIZE);
+   
+   for (i = 0; i < cnt; i++){
+      j = tind[i];
+      indices[i] = vars[j]->userind;
+      values[i] = dj[j];
+      lb[i] = lp_lb[j];
+      ub[i] = lp_ub[j];
+   }
+   /*
+   for (int i=0;i<cnt;i++) {
+      printf("var %d, %20.10f\n",indices[i],values[i]);
+   }
+   printf("\n\n");
+   */
+
+   if (!tm->reduced_costs) {
+      tm->reduced_costs = (rc_desc *) malloc(sizeof(rc_desc));
+      rc = tm->reduced_costs;
+      rc->size    = 10;
+      rc->num_rcs = 0;
+      rc->indices = (int **)calloc(rc->size,sizeof(int *));
+      rc->values  = (double **)calloc(rc->size,sizeof(double *));
+      rc->lb      = (double **)calloc(rc->size,sizeof(double *));
+      rc->ub      = (double **)calloc(rc->size,sizeof(double *));
+      rc->obj     = (double *)malloc(rc->size*DSIZE);
+      rc->cnt     = (int *)calloc(rc->size,ISIZE);
+   } else {
+      rc = tm->reduced_costs;
+   }
+
+   pos = rc->num_rcs%rc->size;
+   if (rc->size==rc->num_rcs) {
+      /* replace the oldest one with the new one */
+      FREE(rc->indices[pos]);
+      FREE(rc->values[pos]);
+      FREE(rc->lb[pos]);
+      FREE(rc->ub[pos]);
+   }
+   rc->indices[pos] = indices;
+   rc->values[pos] = values;
+   rc->lb[pos] = lb;
+   rc->ub[pos] = ub;
+   rc->cnt[pos] = cnt;
+   rc->obj[pos] = p->lp_data->objval;
+   if (rc->num_rcs < rc->size) {
+      rc->num_rcs++;
+   }
+   return 0;
+}
+
+/*===========================================================================*/
+int tighten_root_bounds(lp_prob *p)
+{
+   /* 
+    * using the reduced costs that are saved from the root node, try to
+    * improve variable bounds.
+    * should be called whenever ub is updated.
+    * change only bounds for root. not for the current node. the bounds for
+    * current node are updated in tighten_bounds()
+    */
+   int                  i, j, k, l;
+   rc_desc             *rc = p->tm->reduced_costs;
+   double               gap, max_change;
+   double              *dj, *lb, *ub;
+   int                 *saved_ind;
+   int                 *ind = p->lp_data->tmp.i1;
+   double              *bd = p->lp_data->tmp.d;
+   char                *lu = p->lp_data->tmp.c;
+   int                  cnt, total_changes = 0;
+   double               lpetol = p->lp_data->lpetol;
+   bounds_change_desc  *bnd_change;
+   int                 *new_ind;
+   int                  num_new_bounds;
+   int                  verbosity = p->par.verbosity;
+   int                 *oldindex;
+   double              *oldvalue;
+   char                *oldlu;
+
+   if (!rc) {
+      return 0;
+   }
+
+   if (!p->has_ub) {
+      PRINT(verbosity, -1, ("tighten_root_bounds: cant tighten bounds if ub "
+            "does not exist!\n"));
+      return 0;
+   }
+
+   new_ind = (int *)malloc(p->mip->n*ISIZE);
+   for (i=0; i<rc->num_rcs;i++) {
+      gap = p->ub - rc->obj[i] - p->par.granularity;
+      if (gap<=lpetol) {
+         continue;
+      }
+      saved_ind = rc->indices[i];
+      dj  = rc->values[i];
+      lb = rc->lb[i];
+      ub = rc->ub[i];
+      cnt = 0;
+      for (j=0; j<rc->cnt[i]; j++) {
+         max_change = gap/dj[j];
+         if (max_change > 0 && max_change < ub[j]-lb[j]){
+            ind[cnt] = saved_ind[j];
+            lu[cnt] = 'U';
+            bd[cnt++] = floor(lb[j] + max_change);
+         }else if (max_change < 0 && max_change > lb[j] - ub[j]){
+            ind[cnt] = saved_ind[j];
+            lu[cnt] = 'L';
+            bd[cnt++] = ceil(ub[j] + max_change);
+         }
+      }
+      PRINT(verbosity, 5, ("tighten_root_bounds: at node %d, tightening %d "
+               "bounds in root\n", p->bc_index, cnt));
+      if (cnt == 0) {
+         continue;
+      }
+      /* add these changes to root node */
+      if (p->tm->rootnode->desc.bnd_change) {
+         bnd_change = p->tm->rootnode->desc.bnd_change;
+      } else {
+         p->tm->rootnode->desc.bnd_change = bnd_change = 
+            (bounds_change_desc *)calloc(1,sizeof(bounds_change_desc));
+      }
+      if (bnd_change->num_changes>0) {
+         /* 
+          * update existing changes and store the new ones in a separate array
+          */
+         num_new_bounds=0;
+         oldvalue = bnd_change->value;
+         oldindex = bnd_change->index;
+         oldlu    = bnd_change->lbub;
+         for (k=0; k<cnt; k++) {
+            for (j=0; j<bnd_change->num_changes; j++) {
+               if (oldindex[j]==ind[k] && oldlu[j]==lu[k]){
+                  if (lu[k]=='L' && oldvalue[j]<bd[k]) {
+                     oldvalue[j]=bd[k];
+                     total_changes++;
+                  } else if (lu[k]=='U' && oldvalue[j]>bd[k]) {
+                     oldvalue[j]=bd[k];
+                     total_changes++;
+                  }
+                  break;
+               }
+            }
+            if (j>=bnd_change->num_changes) {
+               new_ind[num_new_bounds] = k;
+               num_new_bounds++;
+            }
+         }
+         /* those changes that dint already have an entry and stored now */
+         if (num_new_bounds) {
+            int new_cnt = num_new_bounds+bnd_change->num_changes;
+            bnd_change->index = (int *)realloc(bnd_change->index,
+                  ISIZE*new_cnt);
+            bnd_change->lbub  = (char *)realloc(bnd_change->lbub,
+                  CSIZE*new_cnt);
+            bnd_change->value = (double *)realloc(bnd_change->value,
+                  DSIZE*new_cnt);
+            oldvalue = bnd_change->value;
+            oldindex = bnd_change->index;
+            oldlu    = bnd_change->lbub;
+            l = bnd_change->num_changes;
+            for (j=0; j<num_new_bounds; j++) {
+               total_changes++;
+               k = new_ind[j]; 
+               oldindex[l] = ind[k];
+               oldlu[l]    = lu[k];
+               oldvalue[l] = bd[k];
+               bnd_change->num_changes++;
+               l++;
+            }
+         }
+      } else {
+         bnd_change->index = (int *)malloc(cnt*ISIZE);
+         bnd_change->lbub  = (char *)malloc(cnt*CSIZE);
+         bnd_change->value = (double *)malloc(cnt*DSIZE);
+         bnd_change->index = (int *) memcpy(bnd_change->index, ind, ISIZE*cnt);
+         bnd_change->lbub  = (char *) memcpy(bnd_change->lbub, lu, CSIZE*cnt);
+         bnd_change->value = (double *) memcpy(bnd_change->value, bd, 
+               DSIZE*cnt);
+         bnd_change->num_changes = cnt;
+      }
+   }
+   if (verbosity>5 && p->tm->rootnode->desc.bnd_change!=NULL) {
+      printf("tighten_root_bounds: root now has %d changes\n",
+            p->tm->rootnode->desc.bnd_change->num_changes);
+   }
+   FREE(new_ind);
+   return 0;
+}
+#endif
+/*===========================================================================*/
+/*===========================================================================*/

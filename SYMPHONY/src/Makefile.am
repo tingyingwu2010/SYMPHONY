@@ -2,12 +2,12 @@
 #                                                                           #
 # This file is part of the SYMPHONY MILP Solver Framework.                  #
 #                                                                           #
-# SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    #
+# SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         #
 # Laci Ladanyi (ladanyi@us.ibm.com).                                        #
 #                                                                           #
 # The author of this file is Menal Guzelsoy                                 #
 #                                                                           #
-# (c) Copyright 2006-2008 Lehigh University. All Rights Reserved.           #
+# (c) Copyright 2006-2009 Lehigh University. All Rights Reserved.           #
 #                                                                           #
 # This software is licensed under the Common Public License. Please see     #
 # accompanying file for terms.                                              #
@@ -70,7 +70,10 @@ SYMHEADERS = \
 	../include/symphony_api.h \
 	../include/sym_timemeas.h \
 	../include/sym_tm.h \
-	../include/sym_tm_params.h
+	../include/sym_tm_params.h \
+	../include/sym_primal_heuristics.h \
+	../include/sym_prep.h  \
+	../include/sym_prep_params.h
 
 if USE_CL
  SYMHEADERS += ../include/sym_win32_time.h
@@ -81,7 +84,7 @@ endif
 SYMINCFILES = ../include/SymConfig.h $(SYMHEADERS)
 
 SYM_MASTER_SRC	= Master/master.c Master/master_wrapper.c Master/master_io.c \
-	Master/master_func.c
+	Master/master_func.c Master/master_prep.c Master/master_prep_base.c Master/master_prep_sr.c 
 
 MASTER_SRC =$(SYM_MASTER_SRC)
 
@@ -99,7 +102,7 @@ TM_SRC          = TreeManager/treemanager.c TreeManager/tm_func.c \
 endif
 
 SYM_LP_SRC = LP/lp_solver.c LP/lp_varfunc.c LP/lp_rowfunc.c \
-	LP/lp_genfunc.c LP/lp_proccomm.c LP/lp_wrapper.c LP/lp_free.c
+	LP/lp_genfunc.c LP/lp_proccomm.c LP/lp_wrapper.c LP/lp_free.c LP/lp_heuristics.c LP/lp_sp.c
 if PSEUDO_COSTS
 SYM_LP_SRC += LP/lp_pseudo_branch.c
 else
@@ -133,7 +136,7 @@ MASTER_SRC     += $(TM_SRC)
 endif
 
 LP_SRC		= LP/lp_solver.c LP/lp_varfunc.c LP/lp_rowfunc.c \
-	LP/lp_genfunc.c LP/lp_proccomm.c LP/lp_wrapper.c LP/lp.c LP/lp_free.c
+	LP/lp_genfunc.c LP/lp_proccomm.c LP/lp_wrapper.c LP/lp.c LP/lp_free.c LP/lp_heuristics.c LP/lp_sp.c
 if PSEUDO_COSTS
 LP_SRC         += LP/lp_pseudo_branch.c
 else
@@ -158,13 +161,13 @@ PACKARRAY_SRC	= Common/pack_array.c
 
 BB_SRC = $(MASTER_SRC) $(DG_SRC) $(TM_SRC) $(LP_SRC) $(CP_SRC) $(CG_SRC) \
 	 $(QSORT_SRC) $(TIME_SRC) $(PROCCOMM_SRC) $(PACKCUT_SRC) \
-	 $(PACKARRAY_SRC)
+	 $(PACKARRAY_SRC) 
 
 ALL_SRC = $(BB_SRC)
 
 ALL_SYM_MASTER = $(SYM_MASTER_SRC) $(SYM_TM_SRC) $(SYM_LP_SRC) $(SYM_CG_SRC) \
 	$(SYM_CP_SRC) $(TIME_SRC) $(QSORT_SRC) $(PROCCOMM_SRC) $(PACKCUT_SRC) \
-	$(PACKARRAY_SRC)
+	$(PACKARRAY_SRC) 
 
 ALL_MASTER	 = $(MASTER_SRC)
 ALL_MASTER 	+= $(TIME_SRC)

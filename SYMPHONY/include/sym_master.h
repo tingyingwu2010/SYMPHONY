@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -40,10 +40,10 @@ typedef struct SYM_ENVIRONMENT{
    params           par;         /* problem parameters */
    prob_times       comp_times;  /* keeps track of the computation times for
 				    the problem */
-   char             has_ub;
+   int              has_ub;
    double           ub;
    lp_sol           best_sol;
-   char             has_mc_ub;
+   int              has_mc_ub;
    double           mc_ub;
    double           obj[2];
    double           utopia[2];
@@ -52,8 +52,14 @@ typedef struct SYM_ENVIRONMENT{
    double           lb;   
    double           obj_offset;
 
-   MIPdesc         *mip; /*For holding the description when read in from MPS */
-
+   MIPdesc         *mip; /*For holding the description when read in from MPS
+			   - also the working copy */
+   
+   MIPdesc         *orig_mip; /*For holding the original description if
+				presolve is used*/
+   MIPdesc         *prep_mip; /* For holding the presolved description if
+				 presolve is used*/
+   
    char             probname[81];
 
    base_desc       *base;
@@ -81,10 +87,12 @@ void usage PROTO((void));
 void version PROTO((void));
 int parse_command_line PROTO((sym_environment *env, int argc, char **argv));
 void read_string PROTO((char *target, char *line, int maxlen));
-void print_statistics PROTO((node_times *tim, problem_stat *stat, double ub,
+void print_statistics PROTO((node_times *tim, problem_stat *stat, 
+                            lp_stat_desc *lp_stat, double ub,
 			     double lb, double initial_time,
 			     double start_time, double finish_time,
-			     double obj_offset, char obj_sense, char has_ub));
+			     double obj_offset, char obj_sense, int has_ub,
+                             sp_desc *solpool));
 
 /*===========================================================================*/
 /*=============== Master wrapper functions (master_wrapper.c) ===============*/
@@ -110,10 +118,15 @@ int process_own_messages_u PROTO((sym_environment *env, int msgtag));
 /*===========================================================================*/
 
 int resolve_node PROTO((sym_environment *env, bc_node * node));
-void update_tree_bound PROTO((sym_environment *env, bc_node *root, 
-			      int change_type));
+int update_tree_bound PROTO((sym_environment *env, bc_node *root, int *cut_num, 
+			      int *cut_ind, char *cru_vars, int change_type));
+void register_cuts PROTO((bc_node *root, int *cut_num,  int *cuts_ind));
+void update_node_desc PROTO((sym_environment *env, bc_node *root, 
+			     int change_type));
 void update_branching_decisions PROTO((sym_environment *env, bc_node *root, 
 			      int change_type));
+void check_trim_tree PROTO((sym_environment *env, bc_node *root, int *cut_num, 
+			    int *cuts_ind, int change_type));
 void cut_ws_tree_index PROTO((sym_environment *env, bc_node *root, int index,  
 			      problem_stat * stat, int change_type));
 void cut_ws_tree_level PROTO((sym_environment *env, bc_node *root, int level,
@@ -148,5 +161,4 @@ double get_ub_for_new_obj PROTO((bc_node *root, MIPdesc *mip, int cnt,
 int check_feasibility_new_rhs PROTO((bc_node * node, MIPdesc * mip, 
 					int cnt, int *ind, double *val));
 int trim_warm_tree PROTO((sym_environment *env, bc_node *n));
-
 #endif

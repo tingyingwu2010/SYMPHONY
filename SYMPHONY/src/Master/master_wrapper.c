@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -170,7 +170,7 @@ int io_u(sym_environment *env)
       if (strcmp(env->par.datafile, "") == 0){
 	 if (env->par.file_type == LP_FORMAT){
 	    err = read_lp(env->mip, env->par.infile, env->probname);
-	    env->par.file_type = 0;
+	    env->par.file_type = MPS_FORMAT;
 	    if (err != 0){
 	       printf("\nErrors in reading LP file\n");
 	       return (ERROR__READING_LP_FILE);
@@ -186,15 +186,16 @@ int io_u(sym_environment *env)
 #ifdef USE_GLPMPL
 	 err = read_gmpl(env->mip, env->par.infile, 
 			 env->par.datafile, env->probname);
-	 env->par.file_type = 0;
+	 env->par.file_type = MPS_FORMAT;
 	 if(!err){
 	    printf("\nErrors in reading gmpl file\n");
 	    return (ERROR__READING_GMPL_FILE);
 	 }
 #else
 	 printf("ERROR: SYMPHONY can only read GMPL/AMPL files if GLPK is \n");
-	 printf("installed and the USE_GLMPL compiler define is set. \n");
+	 printf("installed and the USE_GLPMPL compiler define is set. \n");
 	 printf("Exiting.\n\n");
+	 return (ERROR__READING_GMPL_FILE);
 #endif
       }
       
@@ -363,11 +364,13 @@ int initialize_root_node_u(sym_environment *env)
 	 return(FUNCTION_TERMINATED_ABNORMALLY);
       }
 #endif
-      root->uind.list = (int *) malloc(root->uind.size * ISIZE);
-      for (i = 0; i < root->uind.size; i++){
-	 root->uind.list[i] = i;
+      if(root->uind.size){
+	 root->uind.list = (int *) malloc(root->uind.size * ISIZE);
+	 for (i = 0; i < root->uind.size; i++){
+	    root->uind.list[i] = i;
+	 }
       }
-      
+
       base->varnum = 0;
       base->userind = NULL;
 
@@ -503,11 +506,11 @@ int send_lp_data_u(sym_environment *env, int sender)
 
    s_bufid = init_send(DataInPlace);
    send_char_array((char *)(&env->par.lp_par), sizeof(lp_params));
-   send_char_array(&env->has_ub, 1);
+   send_int_array(&env->has_ub, 1);
    if (env->has_ub)
       send_dbl_array(&env->ub, 1);
    if (env->par.multi_criteria){
-      send_char_array(&env->has_mc_ub, 1);
+      send_int_array(&env->has_mc_ub, 1);
       if (env->has_mc_ub){
 	 send_dbl_array(&env->mc_ub, 1);
 	 send_dbl_array(env->obj, 2);
@@ -644,6 +647,8 @@ int display_solution_u(sym_environment *env, int thread_num)
    int user_res, i;
    lp_sol sol;
 
+   memset(&sol, 0, sizeof(lp_sol));
+   
    sol.xlength = 0;
 
    if (env->par.verbosity < -1){
@@ -664,6 +669,9 @@ int display_solution_u(sym_environment *env, int thread_num)
 
    if (!sol.has_sol){
       switch(env->termcode){
+       case TM_UNBOUNDED:
+	 printf("\nThe problem is unbounded!\n\n");
+	 return(FUNCTION_TERMINATED_NORMALLY);
        case TM_NO_SOLUTION:
 	  printf("\nThe problem is infeasible!");
 	  break;
@@ -710,6 +718,12 @@ int display_solution_u(sym_environment *env, int thread_num)
 		   printf("%8s %10.3f\n", env->mip->colname[sol.xind[i]],
 			  sol.xval[i]);
 		}
+		for (i = 0; i < env->mip->fixed_n; i++){
+		   printf("%8s %10.3f\n",
+			  env->orig_mip->colname[env->mip->fixed_ind[i]],
+			  env->mip->fixed_val[i]);
+		}
+		
 		printf("\n");
 	     }else{
 		printf("+++++++++++++++++++++++++++++++++++++++++++++++++++\n");
@@ -719,7 +733,17 @@ int display_solution_u(sym_environment *env, int thread_num)
 		   if (sol.xind[i] == env->mip->n){
 		      continue;
 		   }
-		   printf("%7d %10.3f\n", sol.xind[i], sol.xval[i]);
+		   if(!env->prep_mip){
+		      printf("%7d %10.3f\n", sol.xind[i], sol.xval[i]);
+		   }else{
+		      printf("%7d %10.3f\n",
+			     env->prep_mip->orig_ind[sol.xind[i]],
+			     sol.xval[i]);
+		   }
+		}
+		for (i = 0; i < env->mip->fixed_n; i++){
+		   printf("%7d %10.3f\n", env->mip->fixed_ind[i],
+			  env->mip->fixed_val[i]);
 		}
 		printf("\n");
 	     }
@@ -768,6 +792,11 @@ int free_master_u(sym_environment *env)
       free_mip_desc(env->mip);
       FREE(env->mip);
    }
+
+   if(env->prep_mip){
+      free_mip_desc(env->prep_mip);
+      FREE(env->prep_mip);
+   }
    
    if (env->rootdesc){
       FREE(env->rootdesc->desc);
@@ -785,6 +814,10 @@ int free_master_u(sym_environment *env)
 #ifdef COMPILE_IN_TM
    if (env->warm_start){
       free_subtree(env->warm_start->rootnode);
+      if(env->warm_start->best_sol.has_sol){
+	 FREE(env->warm_start->best_sol.xind);
+	 FREE(env->warm_start->best_sol.xval);
+      }
       if (env->warm_start->cuts){
 	 for (i = env->warm_start->cut_num - 1; i >= 0; i--){
 	    if (env->warm_start->cuts[i]){

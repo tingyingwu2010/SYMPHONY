@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -70,11 +70,11 @@ void free_col_set(our_col_set **colset)
 
 void free_candidate(branch_obj **cand)
 {
+   int i;
 
    if (*cand){
       branch_obj *can = *cand;
 #ifdef COMPILE_FRAC_BRANCHING
-      int i;
       for (i = can->child_num-1; i >= 0; i--){
 	 if (can->frac_num[i]){
 	    FREE(can->frac_ind[i]);
@@ -83,7 +83,6 @@ void free_candidate(branch_obj **cand)
       }
 #endif
       free_waiting_row(&(can->row));
-      int i;
 #ifndef MAX_CHILDREN_NUM
       FREE(can->sense); FREE(can->rhs); FREE(can->range); FREE(can->branch);
 
@@ -198,6 +197,12 @@ void free_node_desc(node_desc **desc)
       }
       if (n->desc_size > 0)
 	 FREE(n->desc);
+      if (n->bnd_change) {
+         FREE(n->bnd_change->index);
+         FREE(n->bnd_change->lbub);
+         FREE(n->bnd_change->value);
+         FREE(n->bnd_change);
+      }
       FREE(*desc);
    }
 }
@@ -230,7 +235,7 @@ void free_node_dependent(lp_prob *p)
    if (p->waiting_row_num>0) {
       free_waiting_rows(p->waiting_rows, p->waiting_row_num);
       p->waiting_row_num = 0;
-      p->waiting_rows=NULL;
+      FREE(p->waiting_rows);
    }
 
    unload_lp_prob(lp_data);
@@ -259,7 +264,9 @@ void free_lp(lp_prob *p)
    FREE(p->lp_data->rows);
    close_lp_solver(p->lp_data);
    free_lp_arrays(p->lp_data);
-   free_mip_desc(p->lp_data->mip);
+   if (p->par.lp_data_mip_is_copied == TRUE) {
+      free_mip_desc(p->lp_data->mip);
+   }
    FREE(p->lp_data->mip);
    FREE(p->lp_data);
 #if !(defined(COMPILE_IN_TM) && defined(COMPILE_IN_LP))

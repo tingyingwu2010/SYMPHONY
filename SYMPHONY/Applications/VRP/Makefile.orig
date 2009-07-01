@@ -2,12 +2,12 @@
 ##############################################################################
 #                                                                            #
 # This file is part of a demonstration application for use with the          #
-# SYMPHONY MILP Solver Framework.          This application is a solver for  #
+# SYMPHONY MILP Solver Framework. This application is a solver for           #
 # the Vehicle Routing Problem and the Traveling Salesman Problem.            #
 #                                                                            #
 # (c) Copyright 2000-2005  Ted Ralphs. All Rights Reserved.                  #
 #                                                                            #
-# This application was developed by Ted Ralphs (tkralphs@lehigh.edu)         #
+# This application was developed by Ted Ralphs (ted@lehigh.edu)              #
 #                                                                            #
 # This software is licensed under the Common Public License. Please see      #
 # accompanying file for terms.                                               #
@@ -130,4 +130,31 @@ endif
 
 USER_CG_SRC      += tsp.c # $(TSP_SRC)
 endif
+
+##############################################################################
+# This is the flag for the SYMPHONY Makefile to determine whether
+# an application is to be used. You shouldn't need to modify this
+# variable. 
+##############################################################################
+
+USE_SYM_APPL = TRUE
+
+##############################################################################
+# If you want to build SYMPHONY in a directory outside the source tree, 
+# uncomment this and fill in the directory here. Setting these variables will 
+# cause object, library, and binary files associated with SYMPHONY and the 
+# user's application to be built and installed in the corresponding 
+# directories. This is helpful if the user doesn't have write access to the 
+# directory where SYMPHONY is installed.
+##############################################################################
+
+SYMBUILDDIR = $(SYMPHONYROOT)
+USERBUILDDIR = $(USERROOT)
+
+##############################################################################
+# Include the SYMPHONY makefile after all the source file names (and before
+# any used-defined targets!)
+##############################################################################
+
+include $(SYMPHONYROOT)/Makefile
 

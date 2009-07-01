@@ -6,7 +6,7 @@
 /*                                                                           */
 /* (c) Copyright 2000-2007 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
-/* This application was developed by Ted Ralphs (tkralphs@lehigh.edu)        */
+/* This application was developed by Ted Ralphs (ted@lehigh.edu)             */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -16,10 +16,11 @@
 /* system include files */
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <math.h>
 
 /* SYMPHONY include files */
+/*__BEGIN_EXPERIMENTAL_SECTION__*/
+#include "sym_master.h"
+/*___END_EXPERIMENTAL_SECTION___*/
 #include "sym_macros.h"
 #include "sym_constants.h"
 #include "sym_proccomm.h"
@@ -48,6 +49,11 @@
 #include "vrp_lp.h"
 #ifdef COMPILE_IN_CG
 #include "vrp_cg.h"
+/*__BEGIN_EXPERIMENTAL_SECTION__*/
+#ifdef COMPILE_OUR_DECOMP
+#include "my_decomp.h"
+#endif
+/*___END_EXPERIMENTAL_SECTION___*/
 #endif
 #endif
 #endif
@@ -63,6 +69,9 @@ void user_usage(void){
 	  "[ -V sel ] [ -K closest ] [ -N routes ] [ -C capacity ]\n"
 	  "\n\t%s\n\t%s\n\t%s\n\t%s\n\t%s\n\t%s\n\t%s\n\t%s\n"
 	  "\t%s\n\t%s\n\t%s\n"
+/*__BEGIN_EXPERIMENTAL_SECTION__*/
+          "\t%s\n"
+/*___END_EXPERIMENTAL_SECTION___*/
           "\n",
 	  "-H: help",
 	  "-E: use sparse edge set",
@@ -74,6 +83,9 @@ void user_usage(void){
 	  "-V i: verbosity level",
 	  "-K k: use 'k' closest edges to build sparse graph",
 	  "-N n: use 'n' routes",
+/*__BEGIN_EXPERIMENTAL_SECTION__*/
+	  "-P: solve as a Bin Packing Problem",
+/*___END_EXPERIMENTAL_SECTION___*/
 	  "-C c: use capacity 'c'");
 }
 
@@ -213,6 +225,10 @@ int user_start_heurs(void *user, double *ub, double *ub_estimate)
 
    vrp->cur_tour->numroutes = vrp->numroutes;
    
+   /*__BEGIN_EXPERIMENTAL_SECTION__*/
+   if(vrp->par.bpp_prob)
+      *ub = 1;
+   /*___END_EXPERIMENTAL_SECTION___*/
    
 #ifdef COMPILE_HEURS
    if (vrp->par.do_heuristics || vrp->lb_par.lower_bound)
@@ -238,10 +254,21 @@ int user_start_heurs(void *user, double *ub, double *ub_estimate)
    }
    
 
+   /*__BEGIN_EXPERIMENTAL_SECTION__*/
+   if (*ub > 0 && !vrp->par.bpp_prob)
+      printf("INITIAL UPPER BOUND: \t%i\n\n", (int)(*ub));
+   else if (!vrp->par.bpp_prob)
+      printf("INITIAL UPPER BOUND: \tNone\n\n");
+   else
+      printf("\n\n");
+   /*___END_EXPERIMENTAL_SECTION___*/
+   /*UNCOMMENT FOR PRODUCTION CODE*/
+#if 0
    if (*ub > 0)
       printf("INITIAL UPPER BOUND: \t%i\n\n", (int)(*ub));
    else
       printf("INITIAL UPPER BOUND: \tNone\n\n");
+#endif
    
    return(USER_SUCCESS);
 }
@@ -421,6 +448,13 @@ int user_initialize_root_node(void *user, int *basevarnum, int **basevars,
       }
    }
 
+/*__BEGIN_EXPERIMENTAL_SECTION__*/
+   if (vrp->par.bpp_prob){
+      for (i = 0; i < *basevarnum; i++){
+	 vrp->dist.cost[(*basevars)[i]] = 10;
+      }
+   }
+/*___END_EXPERIMENTAL_SECTION___*/
 
    /* Form the set of extra variables */
    switch(vrp->par.base_variable_selection){
@@ -503,6 +537,16 @@ int user_send_lp_data(void *user, void **user_lp)
    vrp_lp->costs = vrp->dist.cost;
 
    vrp_lp->cur_sol = (_node *) calloc (vrp_lp->vertnum, sizeof(_node));
+/*__BEGIN_EXPERIMENTAL_SECTION__*/
+
+   if (vrp_lp->window){
+      copy_node_set(vrp_lp->window, TRUE, (char *)"Original solution");
+#if 0
+      copy_node_set(vrp_lp->window, TRUE, (char *)"Compressed solution");
+#endif
+   }
+
+/*___END_EXPERIMENTAL_SECTION___*/
    
 #else
    /* Here, we send that data using message passing and the rest is
@@ -559,6 +603,15 @@ int user_send_cg_data(void *user, void **user_cg)
    
    edgenum = vrp->vertnum*(vrp->vertnum-1)/2;
       
+/*__BEGIN_EXPERIMENTAL_SECTION__*/
+#ifdef COMPILE_OUR_DECOMP
+   if (vrp->cg_par.do_our_decomp){
+      vrp_cg->cost = vrp->dist.cost;
+      usr_open_decomp_lp( get_cg_ptr(NULL), edgenum );
+   }
+   vrp_cg->last_decomp_index = -1;
+#endif   
+/*___END_EXPERIMENTAL_SECTION___*/
    vrp_cg->in_set = (char *) calloc(vrp->vertnum, sizeof(char));
    vrp_cg->ref = (int *) malloc(vrp->vertnum*sizeof(int));
    vrp_cg->new_demand = (int *) malloc(vrp->vertnum*sizeof(int));
@@ -593,6 +646,10 @@ int user_send_cg_data(void *user, void **user_cg)
    send_int_array(&vrp->vertnum, 1);
    send_int_array(vrp->demand, vrp->vertnum);
    send_int_array(&vrp->capacity, 1);
+   /*__BEGIN_EXPERIMENTAL_SECTION__*/
+   if (vrp->cg_par.do_our_decomp)/* need to send costs to CG too */
+      send_int_array(vrp->dist.cost, vrp->edgenum);
+   /*___END_EXPERIMENTAL_SECTION___*/
 #ifdef CHECK_CUT_VALIDITY
    send_int_array(&vrp->feas_sol_size, 1);
    if (vrp->feas_sol_size){
@@ -661,6 +718,75 @@ int user_send_cp_data(void *user, void **user_cp)
    return(USER_SUCCESS);
 }
 
+/*__BEGIN_EXPERIMENTAL_SECTION__*/
+/*===========================================================================*/
+
+int user_send_sp_data(void *user)
+{
+#ifdef COMPILE_HEURS
+   vrp_problem *vrp = (vrp_problem *) user;
+   int i, j;
+   int size;
+   _node *tour;
+   int *coef;
+   int tournum = vrp->tournum + 1 + vrp->sol_pool_col_num;
+   int cur_node, next_node;
+   int v0, v1;
+   int vertnum = vrp->vertnum;
+   /*FIXME: temporary fix to allow this to compile without PVM*/
+
+   coef = (int *) calloc (vrp->vertnum - 1 + vrp->numroutes, ISIZE);
+   size = (vrp->vertnum-1 + vrp->numroutes) * ISIZE;
+   
+   send_int_array(&vrp->vertnum, 1);
+   
+   send_int_array(&tournum, 1);
+
+   if (tournum <= 0){
+      return(USER_SUCCESS);
+   }
+
+   for (i = 0; i<=vrp->tournum; i++){
+      tour = vrp->tours[i].tour;
+      coef[0] = INDEX(0, tour[0].next);
+      for (cur_node = tour[0].next, next_node = tour[cur_node].next, j = 1;
+	   cur_node;
+	   cur_node = next_node, next_node = tour[next_node].next, j++){
+	 if(tour[cur_node].route == tour[next_node].route){
+	    coef[j] = INDEX(cur_node, next_node);
+	 }else if (next_node){
+	    coef[j++] = INDEX(0, cur_node);
+	    if (coef[j-1] == coef[j-2])
+	       coef[j-1] = vertnum*(vertnum-1)/2 + cur_node - 1;
+	    coef[j] = INDEX(0, next_node);
+	 }else{
+	    coef[j] = INDEX(0, cur_node);
+	 }
+      }
+
+      qsort_i(coef, size/sizeof(int));
+      
+      send_int_array(&size, 1);
+      send_char_array((char *)coef, size);
+   }
+
+   for (i = 0; i<vrp->sol_pool_col_num; i++){
+      for (j = 0; j < 2*size/sizeof(int); j+=2){
+	 v0 = vrp->sol_pool_cols[2*i*size/ISIZE + j];
+	 v1 = vrp->sol_pool_cols[2*i*size/ISIZE + j + 1];
+	 coef[j/2] = INDEX(v0, v1);
+      }
+      qsort_i(coef, size/ISIZE);
+      
+      send_int_array(&size, 1);
+      send_char_array((char *)coef, size);
+   }
+#endif
+
+   return(USER_SUCCESS);
+}
+
+/*___END_EXPERIMENTAL_SECTION___*/
 /*===========================================================================*/
 
 /*===========================================================================*\
@@ -854,7 +980,7 @@ int user_free_master(void **user)
 
 /*===========================================================================*\
  * This function is used to lift the user created cuts during warm starting *
-/*===========================================================================*/
+\*===========================================================================*/
 
 int user_ws_update_cuts (void *user, int *size, char **coef, double * rhs, 
 			 char *sense, char type, int new_col_num, 

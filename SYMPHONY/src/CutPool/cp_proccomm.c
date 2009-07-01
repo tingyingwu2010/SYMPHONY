@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -86,7 +86,7 @@ void cp_process_message(cut_pool *cp, int r_bufid)
 	 pools, each servicing a different subtree */
       receive_int_array(&new_tid, 1);
       freebuf(r_bufid);
-      size = cp->cut_num * sizeof(cp_cut_data);
+      size = cp->cut_num * (int)sizeof(cp_cut_data);
       for (i=0; i<cp->cut_num; i++)
 	 size += cp->cuts[i]->cut.size;
       buf = (char *) calloc(size, sizeof(char));
@@ -323,7 +323,7 @@ void cut_pool_receive_cuts(cut_pool *cp, int bc_level)
       }
 
       cp->cuts[cp->cut_num++] = cp_cut;
-      cp->size += cp_cut->cut.size + sizeof(cp_cut_data);
+      cp->size += cp_cut->cut.size + (int)sizeof(cp_cut_data);
    }
 }
 

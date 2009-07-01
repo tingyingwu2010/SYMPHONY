@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2006-2008 Lehigh University. All Rights Reserved.           */
+/* (c) Copyright 2006-2009 Lehigh University. All Rights Reserved.           */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -19,6 +19,7 @@
 #include "OsiRowCut.hpp"
 #include "OsiColCut.hpp"
 #include "OsiCuts.hpp"
+#include "CoinError.hpp"
 #include "CoinHelperFunctions.hpp"
 #include "CoinSort.hpp"
 #include "OsiSolverInterface.hpp"
@@ -39,6 +40,8 @@ int main (int argc, const char *argv[])
    definedKeyWords.insert("-mpsDir");
    definedKeyWords.insert("-netlibDir");
    definedKeyWords.insert("-testOsiSolverInterface");
+
+   WindowsErrorPopupBlocker();
 
    std::map<std::string,std::string> parms;
    for ( i=1; i<argc; i++ ) {

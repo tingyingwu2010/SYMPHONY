@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -30,10 +30,11 @@
 int check_row_effectiveness(lp_prob *p)
 {
    int ineff_cnt_to_delete = p->par.ineff_cnt_to_delete;
-   char orig_eff = p->par.base_constraints_always_effective;
+   int orig_eff = p->par.base_constraints_always_effective;
    LPdata *lp_data = p->lp_data;
    //double *dualsol = lp_data->dualsol;
    double lpetol = lp_data->lpetol;
+   double lpetol10 = 10*lpetol;
    row_data *row, *rows = lp_data->rows;
    int m = lp_data->m;
 
@@ -53,35 +54,37 @@ int check_row_effectiveness(lp_prob *p)
     * Now based on their slack values, mark each row whether it's
     * violated, loose or tight */
 
+   //int base_m = orig_eff ? bcutnum : 0;
+   
    for (i = m - 1; i >= 0; i--){
       slack = slacks[i];
       switch (rows[i].cut->sense){
        case 'E':
-	 if (slack < -lpetol || slack > lpetol) stat[i] = VIOLATED_ROW;
+	 if (slack < -lpetol10 || slack > lpetol10) stat[i] = VIOLATED_ROW;
 	 else                                   stat[i] = TIGHT_ROW;
 	 break;
        case 'L':
-	 if (slack > lpetol)       stat[i] = SLACK_ROW;
-	 else if (slack > -lpetol) stat[i] = TIGHT_ROW;
-	 else                      stat[i] = VIOLATED_ROW;
+	 if (slack > lpetol10)       stat[i] = SLACK_ROW;
+	 else if (slack > -lpetol10) stat[i] = TIGHT_ROW;
+	 else                        stat[i] = VIOLATED_ROW;
 	 break;
        case 'G':
-	 if (slack < -lpetol)     stat[i] = SLACK_ROW;
-	 else if (slack < lpetol) stat[i] = TIGHT_ROW;
-	 else                     stat[i] = VIOLATED_ROW;
+	 if (slack < -lpetol10)     stat[i] = SLACK_ROW;
+	 else if (slack < lpetol10) stat[i] = TIGHT_ROW;
+	 else                       stat[i] = VIOLATED_ROW;
 	 break;
        case 'R':
 	 if (rows[i].cut->range < 0){
-	    if (slack > rows[i].cut->range + lpetol || slack < -lpetol)
+	    if (slack > rows[i].cut->range + lpetol10 || slack < -lpetol10)
 	       stat[i] = SLACK_ROW;
-	    else if (slack > rows[i].cut->range - lpetol || slack < lpetol)
+	    else if (slack > rows[i].cut->range - lpetol10 || slack < lpetol10)
 	       stat[i] = TIGHT_ROW;
 	    else
 	       stat[i] = VIOLATED_ROW;
 	 }else{
-	    if (slack < rows[i].cut->range - lpetol || slack > lpetol)
+	    if (slack < rows[i].cut->range - lpetol10 || slack > lpetol10)
 	       stat[i] = SLACK_ROW;
-	    else if (slack < rows[i].cut->range + lpetol || slack > - lpetol)
+	    else if (slack < rows[i].cut->range + lpetol10 || slack > - lpetol10)
 	       stat[i] = TIGHT_ROW;
 	    else
 	       stat[i] = VIOLATED_ROW;
@@ -132,7 +135,7 @@ int check_row_effectiveness(lp_prob *p)
 	    rows[i].eff_cnt = 0;
 	    rows[i].ineff_cnt = 0;
 	    inrhsind[violated++] = i;
-	 }
+	 } 
       }
       /* Collect the rows that are deemed ineffective now */
       switch (p->par.ineffective_constraints){
@@ -172,16 +175,20 @@ int check_row_effectiveness(lp_prob *p)
 
    deletable = k = 0;
    for (j = ineffective - 1; j >= 0; j--){
+      
       row = rows + (i = now_ineff[j]);
+
+      if(p->bc_level > 100 && !(row->deletable))row->deletable = TRUE;
+
       if (!row->free && row->deletable){
 	 row->free = TRUE;
 	 row->ineff_cnt = stat[i] == TIGHT_ROW ? 0 : ((MAXINT) >> 1);
 	 outrhsind[k++] = i;
-      }
+      } 
       row->ineff_cnt++;
       if (i >= bcutnum && ! (row->cut->branch & CUT_BRANCHED_ON) &&
-	  row->ineff_cnt >= ineff_cnt_to_delete && row->deletable)
-	 deletable++;
+	  row->deletable && row->ineff_cnt >= ineff_cnt_to_delete )
+        deletable++;
    }
 
    /* stat is not used any more so its location can be used in
@@ -248,6 +255,10 @@ int check_row_effectiveness(lp_prob *p)
 	 }
       }
       delete_rows(lp_data, deletable, free_rows);
+      p->lp_stat.cuts_deleted_from_lps += deletable;
+      if (p->bc_level > 0) {
+         p->lp_stat.num_cuts_slacked_out_in_path += deletable;
+      }
    }
    PRINT(p->par.verbosity, 3, ("\n"));
 
@@ -339,8 +350,10 @@ int add_best_waiting_rows(lp_prob *p)
 {
    int i, added_rows;
    row_data *rows;
+   int max_cut_num_per_iter = (p->bc_level<1)?p->par.max_cut_num_per_iter_root:
+                                            p->par.max_cut_num_per_iter;
 
-   added_rows = MIN(p->par.max_cut_num_per_iter, p->waiting_row_num);
+   added_rows = MIN(max_cut_num_per_iter, p->waiting_row_num);
    if (added_rows < p->waiting_row_num)
       qsort((char *)p->waiting_rows, p->waiting_row_num,
 	    sizeof(waiting_row *), waiting_row_comp);
@@ -377,10 +390,11 @@ void add_waiting_rows(lp_prob *p, waiting_row **wrows, int add_row_num)
 
    sense = lp_data->tmp.c; /* m */
    rhs = lp_data->tmp.d; /* m */
-   REMALLOC(lp_data->tmp.dv, double, lp_data->tmp.dv_size, nzcnt, 5*BB_BUNCH);
+   REMALLOC(lp_data->tmp.dv, double, lp_data->tmp.dv_size, nzcnt, 
+         5*(int)BB_BUNCH);
    rmatval = lp_data->tmp.dv; /* nzcnt */
    rmatbeg = lp_data->tmp.i1;
-   REMALLOC(lp_data->tmp.iv, int, lp_data->tmp.iv_size, nzcnt, 5*BB_BUNCH);
+   REMALLOC(lp_data->tmp.iv, int, lp_data->tmp.iv_size, nzcnt, 5*(int)BB_BUNCH);
    rmatind = lp_data->tmp.iv;
 
    *rmatbeg = 0;

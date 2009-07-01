@@ -6,7 +6,7 @@
 /*                                                                           */
 /* (c) Copyright 2000-2007 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
-/* This application was developed by Ted Ralphs (tkralphs@lehigh.edu)        */
+/* This application was developed by Ted Ralphs (ted@lehigh.edu)             */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -24,6 +24,9 @@
 #include "sym_macros.h"
 #include "sym_qsort.h"
 #include "sym_lp_u.h"
+/*__BEGIN_EXPERIMENTAL_SECTION__*/
+#include "sym_lp.h"
+/*___END_EXPERIMENTAL_SECTION___*/
 
 /* CNRP include files */
 #include "cnrp_lp.h"

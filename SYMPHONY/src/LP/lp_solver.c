@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* The OSI interface in this file was written by Menal Guzelsoy.             */
 /* The OSL interface was written by Ondrej Medek.                            */
@@ -22,7 +22,6 @@
 #include "sym_lp_solver.h"
 #include "sym_constants.h"
 #include "sym_macros.h"
-#include "sym_lp.h"
 
 #ifdef PRINT
 #undef PRINT
@@ -56,6 +55,8 @@ void free_lp_arrays(LPdata *lp_data)
    FREE(lp_data->dj);
    FREE(lp_data->dualsol);
    FREE(lp_data->slacks);
+   FREE(lp_data->random_hash);
+   FREE(lp_data->heur_solution);
 #ifdef __CPLEX__
    FREE(lp_data->lb);
    FREE(lp_data->ub);
@@ -76,18 +77,19 @@ void free_lp_arrays(LPdata *lp_data)
 
 void free_mip_desc(MIPdesc *mip)
 {
-   int j;
+   int j, n = 0;
    
    FREE(mip->matbeg);
    FREE(mip->matind);
    FREE(mip->matval);
-#if 0
    FREE(mip->col_lengths);
    FREE(mip->row_matbeg);
    FREE(mip->row_matind);
    FREE(mip->row_matval);
    FREE(mip->row_lengths);
-#endif
+   FREE(mip->orig_sense);
+   FREE(mip->orig_ind);
+   
    FREE(mip->obj);
    FREE(mip->obj1);
    FREE(mip->obj2);
@@ -98,11 +100,37 @@ void free_mip_desc(MIPdesc *mip)
    FREE(mip->ub);
    FREE(mip->is_int);
    if (mip->colname){
-      for (j = 0; j < mip->n; j++){
+      n = mip->n;
+      if(mip->alloc_n > n){
+	 n = mip->alloc_n;
+      }
+      for (j = 0; j < n; j++){
 	 FREE(mip->colname[j]);
       }
       FREE(mip->colname);
    }
+#if 0
+   if(mip->fixed_name){
+      for(j = 0; j < mip->fixed_n; j++){
+	 FREE(mip->fixed_name[j]);
+      }
+      FREE(mip->fixed_name);
+   }
+#endif
+   
+   FREE(mip->fixed_val);
+   FREE(mip->fixed_ind);
+   
+   if(mip->cru_vars_num){
+      FREE(mip->cru_vars);
+   }
+
+   if(mip->mip_inf){
+      
+      FREE(mip->mip_inf->rows);
+      FREE(mip->mip_inf->cols);
+      FREE(mip->mip_inf);
+   }   
 }
 
 /*===========================================================================*/
@@ -126,7 +154,7 @@ void size_lp_arrays(LPdata *lp_data, char do_realloc, char set_max,
 
    if (maxm > lp_data->maxm){
       resize_m = TRUE;
-      lp_data->maxm = maxm + (set_max ? 0 : BB_BUNCH);
+      lp_data->maxm = maxm + (set_max ? 0 : (int)BB_BUNCH);
       if (! do_realloc){
          FREE(lp_data->dualsol);
          lp_data->dualsol = (double *) malloc(lp_data->maxm * DSIZE);
@@ -145,7 +173,7 @@ void size_lp_arrays(LPdata *lp_data, char do_realloc, char set_max,
    if (maxn > lp_data->maxn){
       // int oldmaxn = MAX(lp_data->maxn, lp_data->n);
       resize_n = TRUE;
-      lp_data->maxn = maxn + (set_max ? 0 : 5 * BB_BUNCH);
+      lp_data->maxn = maxn + (set_max ? 0 : 5 * (int)BB_BUNCH);
       if (! do_realloc){
          FREE(lp_data->x);
          lp_data->x = (double *) malloc(lp_data->maxn * DSIZE);
@@ -153,6 +181,10 @@ void size_lp_arrays(LPdata *lp_data, char do_realloc, char set_max,
          lp_data->dj = (double *) malloc(lp_data->maxn * DSIZE);
          FREE(lp_data->status);
          lp_data->status = (char *) malloc(lp_data->maxn * CSIZE);
+         FREE(lp_data->random_hash);
+         lp_data->random_hash = (double *) malloc(lp_data->maxn * DSIZE);
+         FREE(lp_data->heur_solution);
+         lp_data->heur_solution = (double *) malloc(lp_data->maxn * DSIZE);
 #ifdef __CPLEX__
 	 FREE(lp_data->lb);
 	 lp_data->lb = (double *) malloc(lp_data->maxn * DSIZE);
@@ -166,6 +198,10 @@ void size_lp_arrays(LPdata *lp_data, char do_realloc, char set_max,
                                           lp_data->maxn * DSIZE);
          lp_data->status = (char *) realloc((char *)lp_data->status,
                                             lp_data->maxn * CSIZE);
+         lp_data->random_hash = (double *) realloc((char *)lp_data->random_hash,
+                                         lp_data->maxn * DSIZE);
+         lp_data->heur_solution = (double *) realloc((char *)
+               lp_data->heur_solution, lp_data->maxn * DSIZE);
 #ifdef __CPLEX__
 	 lp_data->lb = (double *) realloc((char *)lp_data->lb,
 					  lp_data->maxn * DSIZE);
@@ -175,7 +211,7 @@ void size_lp_arrays(LPdata *lp_data, char do_realloc, char set_max,
       }
    }
    if (maxnz > lp_data->maxnz){
-      lp_data->maxnz = maxnz + (set_max ? 0 : 20 * BB_BUNCH);
+      lp_data->maxnz = maxnz + (set_max ? 0 : 20 * (int)BB_BUNCH);
    }
 
    /* re(m)alloc the tmp arrays */
@@ -212,7 +248,7 @@ int read_gmpl(MIPdesc *mip, char *modelfile, char *datafile, char *probname)
 {
    MPL * mpl;         
    int errors;
-   int i, j, k, obj_index, length, type, count, nonzeros;
+   int i, j, k, obj_index = 0, length, type, count, nonzeros;
    double *matval;
    int *matind;
    int * matbeg;
@@ -222,7 +258,7 @@ int read_gmpl(MIPdesc *mip, char *modelfile, char *datafile, char *probname)
 
    int *indices;
    double *values;   
-   double inf = SYM_INFINITY;
+   double inf = MAXDOUBLE;//SYM_INFINITY;
 
    mpl = mpl_initialize();  /* initialize the translator */
     
@@ -2278,6 +2314,9 @@ void open_lp_solver(LPdata *lp_data)
    /* Turn off the OSL messages (There are LOTS of them) */
    lp_data->si->setHintParam(OsiDoReducePrint);
    lp_data->si->messageHandler()->setLogLevel(0);
+   lp_data->si->setupForRepeatedUse();
+   //lp_data->si->setupForRepeatedUse(2,0);
+   //lp_data->si->getModelPtr()->setFactorizationFrequency(200);
 #ifdef __OSI_GLPK__
    lp_data->lpetol = 1e-07; /* glpk doesn't return the value of this param */ 
 #else   
@@ -2305,26 +2344,39 @@ void load_lp_prob(LPdata *lp_data, int scaling, int fastmip)
 
    /* Turn off scaling for CLP */
    //lp_data->si->setHintParam(OsiDoScale,false,OsiHintDo);
+   MIPdesc *mip = lp_data->mip;
 
    lp_data->si->loadProblem(lp_data->n, lp_data->m,
-			    lp_data->mip->matbeg, lp_data->mip->matind,
-			    lp_data->mip->matval, lp_data->mip->lb,
-			    lp_data->mip->ub, lp_data->mip->obj,
-			    lp_data->mip->sense, lp_data->mip->rhs,
-			    lp_data->mip->rngval);
+			    mip->matbeg, mip->matind,
+			    mip->matval, mip->lb,
+			    mip->ub, mip->obj,
+			    mip->sense, mip->rhs,
+			    mip->rngval);
 }
 
+/*===========================================================================*/
+int reset_lp_prob(LPdata *lp_data, int scaling, int fastmip)
+{
+   lp_data->si->restoreBaseModel(lp_data->m);
+   return 0;
+}
+
+/*===========================================================================*/
+int save_lp(LPdata *lp_data)
+{
+   lp_data->si->saveBaseModel();
+   return 0;
+}
 /*===========================================================================*/
 
 void unload_lp_prob(LPdata *lp_data)
 {
 
-   lp_data->si->reset();
+   //lp_data->si->reset();
   
    /* Set parameters as in open_lp_solver() (do these persist?) */
    lp_data->si->setHintParam(OsiDoReducePrint);
    lp_data->si->messageHandler()->setLogLevel(0);
-
    lp_data->m = lp_data->n = lp_data->nz = 0;
 }
 
@@ -2389,17 +2441,25 @@ void load_basis(LPdata *lp_data, int *cstat, int *rstat)
 void add_rows(LPdata *lp_data, int rcnt, int nzcnt, double *rhs,
 	      char *sense, int *rmatbeg, int *rmatind, double *rmatval)
 {
-   int i, j;
+   int i, start, size;
+   OsiXSolverInterface  *si = lp_data->si;
    
+   /*
    for (i = 0; i < rcnt; i++){
       CoinPackedVector new_row;
       for (j = rmatbeg[i]; j < rmatbeg[i+1]; j++){
 	 new_row.insert(rmatind[j], rmatval[j]);
       }
-      lp_data->si->addRow(new_row, sense[i], rhs[i], 0);
+      si->addRow(new_row, sense[i], rhs[i], 0);
    }
+   */
 
-   //  lp_data->si->addRows(rcnt,rows,sense,rhs,rowrng);
+   for (i = 0; i < rcnt; i++){
+      start = rmatbeg[i];
+      size = rmatbeg[i+1] - start;
+      CoinPackedVector new_row(size, &rmatind[start], &rmatval[start], FALSE);
+      si->addRow(new_row, sense[i], rhs[i], 0);
+   }
 
    lp_data->m += rcnt;
    lp_data->nz += nzcnt;
@@ -2412,12 +2472,14 @@ void add_cols(LPdata *lp_data, int ccnt, int nzcnt, double *obj,
 	      int *cmatbeg, int *cmatind, double *cmatval,
 	      double *lb, double *ub, char *where_to_move)
 {
+   // TODO: eliminate the inner loop. its inefficient.
    int i, j;
+   OsiXSolverInterface  *si = lp_data->si;
    for (i = 0; i < ccnt; i++){
       CoinPackedVector col;
       for (j = cmatbeg[i]; j < cmatbeg[i+1]; j++)
 	 col.insert(cmatind[j], cmatval[j]);
-      lp_data->si->addCol(col, lb[i], ub[i], obj[i]);
+      si->addCol(col, lb[i], ub[i], obj[i]);
    }
    
    lp_data->n += ccnt;
@@ -2453,38 +2515,102 @@ void change_col(LPdata *lp_data, int col_ind,
  * the termination code of the dual simplex method.
 \*===========================================================================*/
 
+int initial_lp_solve (LPdata *lp_data, int *iterd)
+{
+   
+   //int term = LP_ABANDONED;
+   int term = 0;
+   OsiXSolverInterface  *si = lp_data->si;
+
+    
+   si->initialSolve();
+   
+   if (si->isProvenDualInfeasible())
+      term = LP_D_INFEASIBLE;
+   else if (si->isDualObjectiveLimitReached())
+      term = LP_D_OBJLIM;
+   else if (si->isProvenPrimalInfeasible())
+      term = LP_D_UNBOUNDED;
+   else if (si->isProvenOptimal())
+      term = LP_OPTIMAL;
+   else if (si->isIterationLimitReached())
+      term = LP_D_ITLIM;
+   else if (si->isAbandoned())
+      term = LP_ABANDONED;
+   
+   /* if(term == D_UNBOUNDED){
+      retval=si->getIntParam(OsiMaxNumIteration, itlim); 
+      CAN NOT GET DEFAULT, MIN VALUES in OSI of CPXinfointparam() 
+      }
+   */
+   
+   lp_data->termcode = term;
+   
+   if (term != LP_ABANDONED && term != LP_D_INFEASIBLE){
+      
+      *iterd = si->getIterationCount();
+      
+      lp_data->objval = si->getObjValue();
+      
+      lp_data->lp_is_modified = LP_HAS_NOT_BEEN_MODIFIED;
+   }
+   else{
+      lp_data->lp_is_modified = LP_HAS_BEEN_ABANDONED;
+      printf("OSI Abandoned calculation: Code %i \n\n", term);
+   }
+   
+   /*
+   si->getModelPtr()->tightenPrimalBounds(0.0,0,true);
+   */
+   return(term);
+}
+
+/*===========================================================================*/
+
+/*===========================================================================*\
+ * Solve the lp specified in lp_data->lp with dual simplex. The number of
+ * iterations is returned in 'iterd'. The return value of the function is
+ * the termination code of the dual simplex method.
+\*===========================================================================*/
+
+
 int dual_simplex(LPdata *lp_data, int *iterd)
 {
    
    //int term = LP_ABANDONED;
    int term = 0;
+   OsiXSolverInterface  *si = lp_data->si;
+
     
-   lp_data->si->resolve();
+   si->resolve();
+   //si->initialSolve();
    
-   if (lp_data->si->isProvenDualInfeasible())
+   if (si->isProvenDualInfeasible())
       term = LP_D_INFEASIBLE;
-   else if (lp_data->si->isDualObjectiveLimitReached())
+   else if (si->isDualObjectiveLimitReached())
       term = LP_D_OBJLIM;
-   else if (lp_data->si->isProvenPrimalInfeasible())
+   else if (si->isProvenPrimalInfeasible())
       term = LP_D_UNBOUNDED;
-   else if (lp_data->si->isProvenOptimal())
+   else if (si->isProvenOptimal())
       term = LP_OPTIMAL;
-   else if (lp_data->si->isIterationLimitReached())
+   else if (si->isIterationLimitReached())
       term = LP_D_ITLIM;
-   else if (lp_data->si->isAbandoned())
+   else if (si->isAbandoned())
       term = LP_ABANDONED;
    
    /* if(term == D_UNBOUNDED){
-      retval=lp_data->si->getIntParam(OsiMaxNumIteration, itlim); 
-      CAN NOT GET DEFAULT, MIN VALUES in OSI of CPXinfointparam() */
+      retval=si->getIntParam(OsiMaxNumIteration, itlim); 
+      CAN NOT GET DEFAULT, MIN VALUES in OSI of CPXinfointparam() 
+      }
+   */
    
    lp_data->termcode = term;
    
    if (term != LP_ABANDONED){
       
-      *iterd = lp_data->si->getIterationCount();
+      *iterd = si->getIterationCount();
       
-      lp_data->objval = lp_data->si->getObjValue();
+      lp_data->objval = si->getObjValue();
       
       lp_data->lp_is_modified = LP_HAS_NOT_BEEN_MODIFIED;
    }   
@@ -2493,6 +2619,9 @@ int dual_simplex(LPdata *lp_data, int *iterd)
       printf("OSI Abandoned calculation: Code %i \n\n", term);
    }
    
+   /*
+   si->getModelPtr()->tightenPrimalBounds(0.0,0,true);
+   */
    return(term);
 }
 
@@ -2508,24 +2637,25 @@ int solve_hotstart(LPdata *lp_data, int *iterd)
    
    //int term = LP_ABANDONED;
    int term = 0;
+   OsiXSolverInterface  *si = lp_data->si;
     
-   lp_data->si->solveFromHotStart();
+   si->solveFromHotStart();
    
-   if (lp_data->si->isProvenDualInfeasible())
+   if (si->isProvenDualInfeasible())
       term = LP_D_INFEASIBLE;
-   else if (lp_data->si->isDualObjectiveLimitReached())
+   else if (si->isDualObjectiveLimitReached())
       term = LP_D_OBJLIM;
-   else if (lp_data->si->isProvenPrimalInfeasible())
+   else if (si->isProvenPrimalInfeasible())
       term = LP_D_UNBOUNDED;
-   else if (lp_data->si->isProvenOptimal())
+   else if (si->isProvenOptimal())
       term = LP_OPTIMAL;
-   else if (lp_data->si->isIterationLimitReached())
+   else if (si->isIterationLimitReached())
       term = LP_D_ITLIM;
-   else if (lp_data->si->isAbandoned())
+   else if (si->isAbandoned())
       term = LP_ABANDONED;
    
    /* if(term == D_UNBOUNDED){
-      retval=lp_data->si->getIntParam(OsiMaxNumIteration, itlim); 
+      retval=si->getIntParam(OsiMaxNumIteration, itlim); 
       CAN NOT GET DEFAULT, MIN VALUES in OSI of CPXinfointparam() */
    /* } to unconfuse vi */
    
@@ -2533,9 +2663,9 @@ int solve_hotstart(LPdata *lp_data, int *iterd)
    
    if (term != LP_ABANDONED){
       
-      *iterd = lp_data->si->getIterationCount();
+      *iterd = si->getIterationCount();
       
-      lp_data->objval = lp_data->si->getObjValue();
+      lp_data->objval = si->getObjValue();
       
       lp_data->lp_is_modified = LP_HAS_NOT_BEEN_MODIFIED;
    }   
@@ -2681,12 +2811,13 @@ void get_column(LPdata *lp_data, int j,
    const double *matval = matrixByCol->getElements();
    const int *matind = matrixByCol->getIndices(); 
    const int *matbeg = matrixByCol->getVectorStarts();
+   const int matbeg_j = matbeg[j];
 
    *collen = matrixByCol->getVectorSize(j);
    
    for (i = 0; i < (*collen); i++){
-      colval[i] = matval[matbeg[j] + i];
-      colind[i] = matind[matbeg[j] + i];
+      colval[i] = matval[matbeg_j + i];
+      colind[i] = matind[matbeg_j + i];
    }
    
    const double * objval = lp_data->si->getObjCoefficients();
@@ -2707,14 +2838,15 @@ void get_row(LPdata *lp_data, int i,
    const double *matval = matrixByRow->getElements();  
    const int *matind = matrixByRow->getIndices(); 
    const int *matbeg = matrixByRow->getVectorStarts();
+   const int matbeg_i = matbeg[i];
 
    *rowlen = matrixByRow->getVectorSize(i);
    *rowub = lp_data->si->getRowUpper()[i];
    *rowlb = lp_data->si->getRowLower()[i];      
 
    for (j = 0; j < (*rowlen); j++){
-      rowval[j] = matval[matbeg[i] + j];
-      rowind[j] = matind[matbeg[i] + j];
+      rowval[j] = matval[matbeg_i + j];
+      rowind[j] = matind[matbeg_i + j];
    }
 }
 
@@ -2760,16 +2892,18 @@ void get_slacks(LPdata *lp_data)
    int m = lp_data->m, i = 0;
    double * slacks = lp_data->slacks;
    row_data *rows = lp_data->rows;
+   cut_data *cut;
    
 #ifndef __OSI_CPLEX__
    
    const double * rowActivity = lp_data->si->getRowActivity();
    
    for (i = m - 1; i >= 0; i--) {
-      if ((rows[i].cut->sense == 'R') && (rows[i].cut->range < 0) ) {
-	 slacks[i] = - rows[i].cut->rhs + rowActivity[i];
+      cut = rows[i].cut;
+      if ((cut->sense == 'R') && (cut->range < 0) ) {
+	 slacks[i] = - cut->rhs + rowActivity[i];
       } else {
-	 slacks[i] = rows[i].cut->rhs - rowActivity[i];
+	 slacks[i] = cut->rhs - rowActivity[i];
       }
    }
 
@@ -2778,7 +2912,7 @@ void get_slacks(LPdata *lp_data)
    CPXgetslack(lp_data->si->getEnvironmentPtr(), lp_data->si->getLpPtr(),
 	       lp_data->slacks, 0, lp_data->m-1);
    /* Compute the real slacks for the free rows */
-   for (i =m - 1; i >= 0; i--){
+   for (i = m - 1; i >= 0; i--){
       if (rows[i].free){
 	 switch (rows[i].cut->sense){
 	  case 'E': slacks[i] +=  rows[i].cut->rhs - SYM_INFINITY; break;
@@ -2808,16 +2942,19 @@ void change_rhs(LPdata *lp_data, int rownum, int *rhsind, double *rhsval)
 {
    char *sense = lp_data->tmp.c; 
    double *range = lp_data->tmp.d; 
+   OsiXSolverInterface  *si = lp_data->si;
    int i;
+   const char *si_sense = si->getRowSense();
+   const double *si_range = si->getRowRange();
 
    for (i = 0; i < rownum; i++){
-      sense[i] = lp_data->si->getRowSense()[rhsind[i]];
+      sense[i] = si_sense[rhsind[i]];
       if (sense[i] == 'R'){
-	 range[i] = lp_data->si->getRowRange()[rhsind[i]];
+	 range[i] = si_range[rhsind[i]];
       }
    }
    
-   lp_data->si->setRowSetTypes(rhsind, rhsind + rownum, sense, rhsval, range);
+   si->setRowSetTypes(rhsind, rhsind + rownum, sense, rhsval, range);
 }
 
 /*===========================================================================*/
@@ -2826,15 +2963,18 @@ void change_sense(LPdata *lp_data, int cnt, int *index, char *sense)
 {
   double *rhs = lp_data->tmp.d; 
   double *range = (double *) calloc(cnt, DSIZE);
+  OsiXSolverInterface  *si = lp_data->si;
+  const double *si_rhs = si->getRightHandSide();
+  const double *si_range = si->getRowRange();
   int i; 
 
   for (i = 0; i < cnt; i++){
-     rhs[i] = lp_data->si->getRightHandSide()[index[i]];
+     rhs[i] = si_rhs[index[i]];
      if (sense[i] == 'R')
-	range[i] = lp_data->si->getRowRange()[index[i]];
+        range[i] = si_range[index[i]];
   }
 
-  lp_data->si->setRowSetTypes(index, index + cnt, sense, rhs, range);
+  si->setRowSetTypes(index, index + cnt, sense, rhs, range);
 
   FREE(range);
 }
@@ -2844,14 +2984,15 @@ void change_sense(LPdata *lp_data, int cnt, int *index, char *sense)
 void change_bounds(LPdata *lp_data, int cnt, int *index, char *lu, double *bd)
 {
    int i;
+   OsiXSolverInterface  *si = lp_data->si;
  
    for (i = 0; i < cnt; i++){
       switch (lu[i]){
        case 'L':
-	 lp_data->si->setColLower(index[i], bd[i]); 
+	 si->setColLower(index[i], bd[i]); 
 	 break;
        case 'U':
-	 lp_data->si->setColUpper(index[i], bd[i]); 
+	 si->setColUpper(index[i], bd[i]); 
 	 break;
        default:
 	 /* default: can't happen */
@@ -2916,6 +3057,99 @@ void get_objcoef(LPdata *lp_data, int j, double *objcoef)
 }
 
 /*===========================================================================*/
+void get_objcoeffs(LPdata *lp_data)
+{
+   const double *si_objcoeffs = lp_data->si->getObjCoefficients();
+   memcpy (lp_data->mip->obj,si_objcoeffs,lp_data->n*DSIZE);
+}
+
+/*===========================================================================*/
+void change_objcoeff(LPdata *lp_data, const int* indexFirst, 
+      const int* indexLast, double *coeffs)
+{
+   lp_data->si->setObjCoeffSet(indexFirst, indexLast, coeffs);
+}
+
+/*===========================================================================*/
+void get_rhs_rng_sense(LPdata *lp_data)
+{
+   const double *rowub = lp_data->si->getRowUpper();
+   const double *rowlb = lp_data->si->getRowLower();
+   double *mip_rhs = lp_data->mip->rhs;
+   double *mip_rngval = lp_data->mip->rngval;
+   char *mip_sense = lp_data->mip->sense;
+
+   for (int i=0;i<lp_data->m;i++) {
+      if (rowub[i]>=SYM_INFINITY) {
+         mip_sense[i] = 'G';
+         mip_rhs[i] = rowlb[i];
+      }
+      else if (rowlb[i]<=-SYM_INFINITY) {
+         mip_sense[i] = 'L';
+         mip_rhs[i] = rowub[i];
+      }
+      else {
+         mip_sense[i] = 'R';
+         mip_rhs[i] = rowub[i];
+         mip_rngval[i] = rowub[i]-rowlb[i];
+      }
+   }
+}
+
+/*===========================================================================*/
+/* 
+ * copy everything from lp_data into new_data. it is assumed that new_data is
+ * already mallocced.
+ */
+int copy_lp_data(LPdata *lp_data, LPdata *new_data)
+{
+   int termcode = FUNCTION_TERMINATED_NORMALLY;
+   int n = lp_data->n;
+   int m = lp_data->m;
+   double *lb, *ub;
+   OsiXSolverInterface  *si = lp_data->si;
+
+   if (!new_data) {
+      return FUNCTION_TERMINATED_ABNORMALLY;
+   }
+
+   new_data->lpetol = lp_data->lpetol;
+   new_data->n = n;
+   new_data->m = m;
+   new_data->nz = lp_data->nz;
+   new_data->maxn = lp_data->maxn;
+   new_data->maxm = lp_data->maxm;
+   new_data->maxnz = lp_data->maxnz;
+
+   lb = (double *)malloc(n*DSIZE);
+   ub = (double *)malloc(n*DSIZE);
+
+   open_lp_solver(new_data);
+   /* Turn off the OSI messages (There are LOTS of them) */
+   new_data->si->setHintParam(OsiDoReducePrint);
+   new_data->si->messageHandler()->setLogLevel(0);
+
+   new_data->si->loadProblem(*(si->getMatrixByRow()),
+                             si->getColLower(),
+                             si->getColUpper(),
+                             si->getObjCoefficients(),
+                             si->getRowLower(),
+                             si->getRowUpper()
+                             );
+   /* get_bounds just returns a const pointer to si->ub, si->lb. we need to
+    * memcpy because these pointers get changed when addCols is used */
+   get_bounds(new_data);
+   memcpy(lb,new_data->lb,DSIZE*n);
+   memcpy(ub,new_data->ub,DSIZE*n);
+
+   new_data->lb = lb;
+   new_data->ub = ub;
+
+
+   return termcode;
+}
+
+/*===========================================================================*/
 
 void delete_rows(LPdata *lp_data, int deletable, int *free_rows)
 {
@@ -2935,6 +3169,16 @@ void delete_rows(LPdata *lp_data, int deletable, int *free_rows)
    lp_data->si->deleteRows(delnum, which);
    lp_data->nz = lp_data->si->getNumElements();
    lp_data->m -= delnum;
+}
+
+/*===========================================================================*/
+
+void delete_rows_with_ind(LPdata *lp_data, int deletable, int *rowind)
+{
+   
+   lp_data->si->deleteRows(deletable, rowind);
+   lp_data->nz = lp_data->si->getNumElements();
+   lp_data->m -= deletable;
 }
 
 /*===========================================================================*/
@@ -2991,12 +3235,17 @@ void free_row_set(LPdata *lp_data, int length, int *index)
    double *rhs = lp_data->tmp.d; /* m */
    double *range = (double *) calloc(length, DSIZE);
    int i; 
+   OsiXSolverInterface  *si = lp_data->si;
+   const double infinity = si->getInfinity();
+   const double *si_rhs = si->getRightHandSide();
+   const double *si_rowrange = si->getRowRange();
+   const char *si_rowsense = si->getRowSense();
    
    for (i = 0; i < length; i++){
-      rhs[i] = lp_data->si->getRightHandSide()[index[i]];
-      sense[i] = lp_data->si->getRowSense()[index[i]];
+      rhs[i] = si_rhs[index[i]];
+      sense[i] = si_rowsense[index[i]];
       if (sense[i] =='R'){
-	 range[i] = lp_data->si->getRowRange()[index[i]];
+	 range[i] = si_rowrange[index[i]];
       }
    }
    
@@ -3004,21 +3253,21 @@ void free_row_set(LPdata *lp_data, int length, int *index)
      //     range[i]=0;
      switch (sense[i]){
      case 'E':
-       rhs[i] = lp_data->si->getInfinity();
+       rhs[i] = infinity;
        sense[i] = 'L';
        break;
      case 'L':
-       rhs[i] = lp_data->si->getInfinity(); 
+       rhs[i] = infinity; 
        break;
      case 'R':
-       range[i] = 2*lp_data->si->getInfinity();
+       range[i] = 2*infinity;
        break;
      case 'G':
-       rhs[i] = -lp_data->si->getInfinity();
+       rhs[i] = -infinity;
       }
    }
 
-   lp_data->si->setRowSetTypes(index, index + length, sense, rhs, range);
+   si->setRowSetTypes(index, index + length, sense, rhs, range);
    
    FREE(range);
 }
@@ -3146,21 +3395,24 @@ int read_mps(MIPdesc *mip, char *infile, char *probname)
 	  DSIZE * mip->matbeg[mip->n]);  
    memcpy(mip->matind, const_cast<int *> (matrixByCol->getIndices()), 
 	  ISIZE * mip->matbeg[mip->n]);  
-   
+
+   mip->colname = (char **) malloc(sizeof(char *) * mip->n);  
+
    for (j = 0; j < mip->n; j++){
       mip->is_int[j] = mps.isInteger(j);
-   }
-
-   mip->obj_offset = -mps.objectiveOffset();
-
-   mip->colname = (char **) malloc(sizeof(char *) * mip->n);   
-   
-   for (j = 0; j < mip->n; j++){
       mip->colname[j] = (char *) malloc(CSIZE * 9);
       strncpy(mip->colname[j], const_cast<char*>(mps.columnName(j)), 9);
       mip->colname[j][8] = 0;
    }
-   
+
+   if (mip->obj_sense == SYM_MAXIMIZE){
+      for (j = 0; j < mip->n; j++){
+	 mip->obj[j] *= -1.0;
+      }
+   }
+    
+   mip->obj_offset = -mps.objectiveOffset();
+
    return(errors);
 }
 
@@ -3218,21 +3470,24 @@ int read_lp(MIPdesc *mip, char *infile, char *probname)
 	  DSIZE * mip->matbeg[mip->n]);  
    memcpy(mip->matind, const_cast<int *> (matrixByCol->getIndices()), 
 	  ISIZE * mip->matbeg[mip->n]);  
-   
+
+   mip->colname = (char **) malloc(sizeof(char *) * mip->n); 
+
    for (j = 0; j < mip->n; j++){
       mip->is_int[j] = lp.isInteger(j);
-   }
-
-   mip->obj_offset = -lp.objectiveOffset();
-
-   mip->colname = (char **) malloc(sizeof(char *) * mip->n);   
-   
-   for (j = 0; j < mip->n; j++){
       mip->colname[j] = (char *) malloc(CSIZE * 9);
       strncpy(mip->colname[j], const_cast<char*>(lp.columnName(j)), 9);
       mip->colname[j][8] = 0;
    }
-   
+
+   if (mip->obj_sense == SYM_MAXIMIZE){
+      for (j = 0; j < mip->n; j++){
+	 mip->obj[j] *= -1.0;
+      }
+   }
+
+   mip->obj_offset = -lp.objectiveOffset();
+
    return 0;
 }
 
@@ -3241,14 +3496,15 @@ int read_lp(MIPdesc *mip, char *infile, char *probname)
 void write_mps(LPdata *lp_data, char *fname)
 {
    const char * extension = "MPS";
-   double ObjSense = lp_data->si->getObjSense();
+   OsiXSolverInterface  *si = lp_data->si;
+   double ObjSense = si->getObjSense();
    int i;
    
    for (i = 0; i < lp_data->n; i++) {
-      lp_data->si->setContinuous(i);
+      si->setContinuous(i);
    }
 
-   lp_data->si->writeMps(fname, extension, ObjSense);
+   si->writeMps(fname, extension, ObjSense);
 }
 
 /*===========================================================================*/
@@ -3356,20 +3612,32 @@ void write_sav(LPdata *lp_data, char *fname)
 #include "sym_qsort.h"
 
 void generate_cgl_cuts(LPdata *lp_data, int *num_cuts, cut_data ***cuts,
-		       char send_to_pool, int is_rootnode, int verbosity)
+		       char send_to_pool, int bc_index, int bc_level, 
+                       int node_iter_num, int max_cuts_before_resolve, 
+                       double ub, int *bnd_changes,
+                       lp_stat_desc *lp_stat, node_times *comp_times,
+                       int verbosity)
 {
+#if 0
    OsiCuts              cutlist;
-   OsiRowCut            cut;
-   int                  i = 0, j = 0;
+   OsiRowCut            cut, cut2;
+   int                  n = lp_data->n;
+   int                  i = 0, j = 0, k = 0, l = 0;
    int                  *matind;
-   double               *matval;
+   double               *matval, total_time=0, cut_time=0;
    cgl_params           *par = &(lp_data->cgl);
    int                  termcode, iterd, cut_num = 0;
    int                  new_cut_num = 0;
    int                  is_top_iter = (lp_data->lp_count == 1) ? TRUE : FALSE; 
    OsiXSolverInterface  *si = lp_data->si;
    var_desc             **vars = lp_data->vars;
-
+   int                  is_rootnode = (bc_index>0) ? FALSE : TRUE;
+   //double               *newLower = lp_data->tmp.d;
+   //double               *newUpper = lp_data->tmp.d+n;
+   int                  sizeColCuts, should_generate;
+   int                  num_duplicate_cuts = 0;
+   const double         lpetol = lp_data->lpetol;
+   const double         etol1000 = lpetol*1000;
 
 #ifndef COMPILE_IN_LP
    par->probing_generated_in_root               = TRUE;
@@ -3379,7 +3647,7 @@ void generate_cgl_cuts(LPdata *lp_data, int *num_cuts, cut_data ***cuts,
    par->mir_generated_in_root                   = TRUE;
    par->twomir_generated_in_root                = FALSE;
    par->clique_generated_in_root                = FALSE;
-   par->flow_and_cover_generated_in_root        = TRUE;
+   par->flowcover_generated_in_root             = TRUE;
    par->rounding_generated_in_root              = FALSE;
    par->lift_and_project_generated_in_root      = FALSE;
    par->landp_generated_in_root                 = FALSE;
@@ -3390,84 +3658,245 @@ void generate_cgl_cuts(LPdata *lp_data, int *num_cuts, cut_data ***cuts,
     * TODO: take this loop outside, should not be called in every call of
     * generate_cgl_cuts
     */
-   for (i = 0; i < lp_data->n; i++) {
-      if (vars[i]->is_int) { // integer or binary
-	 si->setInteger(i);
-      }
-   }  
+   if (node_iter_num < 2) {
+      for (i = 0; i < n; i++) {
+         if (vars[i]->is_int) { // integer or binary
+            si->setInteger(i);
+         }
+      }  
+   }
+   /* TODO: move these to vars[i]->... */
+   //get_bounds(lp_data);
+   //memcpy(newLower,lp_data->lb,DSIZE*n);
+   //memcpy(newUpper,lp_data->ub,DSIZE*n);
+
    
+   /* twice is necessary */
+   cut_time = used_time(&total_time);
+   cut_time = used_time(&total_time);
+
    /* create CGL probing cuts */
-   if(par->generate_cgl_probing_cuts > -1 && 
-      par->generate_cgl_probing_cuts_freq > 0){
-      if(par->generate_cgl_probing_cuts == GENERATE_ALWAYS || 
-	 (par->generate_cgl_probing_cuts == GENERATE_ONLY_IN_ROOT &&
-	  is_rootnode && par->probing_generated_in_root) || 
-	 ((par->generate_cgl_probing_cuts == GENERATE_DEFAULT ||
-	   par->generate_cgl_probing_cuts == GENERATE_IF_IN_ROOT) &&
-	  par->probing_generated_in_root) ||
-	 (par->generate_cgl_probing_cuts == GENERATE_PERIODICALLY &&
-	  (lp_data->lp_count % par->generate_cgl_probing_cuts_freq == 0)) ||
-	 is_top_iter){	 
-	CglProbing *probe = new CglProbing;
-#if 0
-   probe->createCliques(*si, 2, 1000, false);
-	probe->setUsingObjective(true);
-	probe->setMaxPass(3);
-        probe->setMaxElements(100+(int)0.05*lp_data->n);
-        probe->setMaxElements(200);
-	probe->setRowCuts(3);
-        probe->setMaxLook(2);
-        probe->setMaxProbe(2);
-        if (is_rootnode) {
-           probe->setMaxPass(2);
-           probe->setMaxElements(200+(int)0.2*lp_data->n);
-        }
-   probe->deleteCliques();
-#endif
-	probe->generateCuts(*(si), cutlist);
-	if ((new_cut_num = cutlist.sizeRowCuts() - cut_num) > 0) {
-	   if (is_top_iter){
-	      par->probing_generated_in_root = TRUE;
-	   }
-	   PRINT(verbosity, 5,
-		 ("%i probing cuts added\n", new_cut_num));
-	}
-	cut_num = cutlist.sizeRowCuts();
-	delete probe;
-     }
+   should_generate_this_cgl_cut(cut_num, max_cuts_before_resolve, 
+         par->generate_cgl_probing_cuts, 
+         par->generate_cgl_probing_cuts_freq, bc_level, bc_index, 
+         lp_stat->probing_cuts_root, &should_generate);
+   if (should_generate==TRUE) {
+      CglProbing *probe = new CglProbing;
+      probe->setRowCuts(0); 
+      probe->setMode(2);
+      if (ub < SYM_INFINITY/10) {
+         probe->setUsingObjective(1);
+      } else {
+         probe->setUsingObjective(0);
+      }
+      if ((bc_level<6 && comp_times->probing_cuts>comp_times->lp) || 
+          (bc_level>6 && comp_times->probing_cuts>comp_times->lp/10)) {
+         /* since we are not using cgltreeinfo, 
+          * all nodes are like root nodes 
+          */
+         probe->setMaxLookRoot(5); 
+      } else if (bc_level < 1) {
+         probe->setMaxPass(10); /* default is 3 */
+         probe->setMaxPassRoot(10); /* default is 3 */
+         probe->setMaxElements(10000);  /* default is 1000, 10000 for root */
+         probe->setMaxElementsRoot(10000); /* default is 1000, 10000 for root */
+         probe->setMaxLook(100);    /* default is 50 */
+         probe->setMaxLookRoot(100);    /* default is 50 */
+         probe->setMaxProbe(200);   /* default is 100 */
+         probe->setMaxProbeRoot(200);   /* default is 100 */
+      }
+      probe->generateCuts(*(si), cutlist);
+      if ((new_cut_num = cutlist.sizeCuts() - cut_num) > 0) {
+         if (is_top_iter){
+            par->probing_generated_in_root = TRUE;
+         }
+         PRINT(verbosity, 4,
+               ("%i probing cuts added\n", new_cut_num));
+         lp_stat->cuts_generated += new_cut_num;
+         lp_stat->probing_cuts += new_cut_num;
+         if (is_rootnode) {
+            lp_stat->cuts_root   += new_cut_num;
+            lp_stat->probing_cuts_root   += new_cut_num;
+         }
+      }
+      cut_num = cutlist.sizeCuts();
+      delete probe;
+      cut_time = used_time(&total_time);
+      comp_times->cuts += cut_time;
+      comp_times->probing_cuts += cut_time;
+      //cutlist.printCuts();
+   } 
+   check_cuts(cutlist, lp_data, bc_level, num_cuts, cuts, send_to_pool, 
+         bnd_changes, lp_stat, comp_times, verbosity);
+
+   /* create CGL knapsack cuts */
+   should_generate_this_cgl_cut(cut_num, max_cuts_before_resolve, 
+         par->generate_cgl_knapsack_cuts, 
+         par->generate_cgl_knapsack_cuts_freq, bc_level, bc_index, 
+         lp_stat->knapsack_cuts_root, &should_generate);
+   if (should_generate==TRUE) {
+      CglKnapsackCover *knapsack = new CglKnapsackCover;
+      if (bc_level<6) {
+         knapsack->setMaxInKnapsack(1000); // default is 50
+         knapsack->switchOffExpensive(); // seems to get into infinite loop if 
+                                         // turned on
+      } 
+      knapsack->generateCuts(*si, cutlist);
+      if ((new_cut_num = cutlist.sizeCuts() - cut_num) > 0) {
+         if (is_top_iter){
+            par->knapsack_generated_in_root = TRUE;
+         }
+         PRINT(verbosity, 4,
+               ("%i knapsack cuts added\n", new_cut_num));
+         lp_stat->cuts_generated += new_cut_num;
+         lp_stat->knapsack_cuts += new_cut_num;
+         if (is_rootnode) {
+            lp_stat->cuts_root   += new_cut_num;
+            lp_stat->knapsack_cuts_root += new_cut_num;
+         }
+      }
+      cut_num = cutlist.sizeCuts();       
+      delete knapsack;
+      cut_time = used_time(&total_time);
+      comp_times->cuts += cut_time;
+      comp_times->knapsack_cuts += cut_time;
+   }
+
+   /* create CGL clique cuts */
+   should_generate_this_cgl_cut(cut_num, max_cuts_before_resolve,
+         par->generate_cgl_clique_cuts, par->generate_cgl_clique_cuts_freq,
+         bc_level, bc_index, lp_stat->clique_cuts_root, &should_generate);
+   if (should_generate==TRUE) {
+      CglClique *clique = new CglClique;
+      if (bc_level<6) {
+         clique->setStarCliqueCandidateLengthThreshold(100); // default 12
+         clique->setRowCliqueCandidateLengthThreshold(100); // default 12
+      } 
+
+      clique->setStarCliqueReport(FALSE);
+      clique->setRowCliqueReport(FALSE);
+      clique->generateCuts(*(lp_data->si), cutlist);
+      if ((new_cut_num = cutlist.sizeCuts() - cut_num) > 0) {
+         if (is_top_iter){
+            par->clique_generated_in_root = TRUE;
+         }
+         PRINT(verbosity, 4,
+               ("%i clique cuts added\n", new_cut_num));
+         lp_stat->cuts_generated += new_cut_num;
+         lp_stat->clique_cuts += new_cut_num;
+         if (is_rootnode) {
+            lp_stat->cuts_root   += new_cut_num;
+            lp_stat->clique_cuts_root += new_cut_num;
+         }
+      }
+      cut_num = cutlist.sizeCuts();       
+      delete clique;
+      cut_time = used_time(&total_time);
+      comp_times->cuts += cut_time;
+      comp_times->clique_cuts += cut_time;
    }
 
    /* create CGL gomory cuts */
-   if(par->generate_cgl_gomory_cuts > -1 && 
-      par->generate_cgl_gomory_cuts_freq > 0){
-      if(par->generate_cgl_gomory_cuts == GENERATE_ALWAYS || 
-	 (par->generate_cgl_gomory_cuts == GENERATE_ONLY_IN_ROOT &&
-	  is_rootnode && par->gomory_generated_in_root) || 
-	((par->generate_cgl_gomory_cuts == GENERATE_DEFAULT ||
-	  par->generate_cgl_gomory_cuts == GENERATE_IF_IN_ROOT) &&
-	 par->gomory_generated_in_root) ||
-	(par->generate_cgl_gomory_cuts == GENERATE_PERIODICALLY &&
-	 (lp_data->lp_count % par->generate_cgl_gomory_cuts_freq == 0)) ||
-	is_top_iter){				     
-	CglGomory *gomory = new CglGomory;
-#if 0
-        //gomory->setLimit(1000);
-        //if (is_rootnode) {
-        //gomory->setLimit(200+(int)0.2*lp_data->n);
-        //} 
-        //gomory->setAway(0.05);
-#endif
-	gomory->generateCuts(*si, cutlist);
-        if ((new_cut_num = cutlist.sizeRowCuts() - cut_num) > 0) {
-           if (is_top_iter){
-              par->gomory_generated_in_root = TRUE;
-           }
-           PRINT(verbosity, 5,
-                 ("%i Gomory cuts added\n", new_cut_num));
-        }
-        cut_num = cutlist.sizeRowCuts();       
-        delete gomory;
+   should_generate_this_cgl_cut(cut_num, max_cuts_before_resolve, 
+         par->generate_cgl_gomory_cuts, 
+         par->generate_cgl_gomory_cuts_freq, bc_level, bc_index, 
+         lp_stat->gomory_cuts_root, &should_generate);
+   if (should_generate==TRUE) {
+      if ((bc_level<6 && comp_times->gomory_cuts<comp_times->lp) || 
+          (bc_level>6 && comp_times->gomory_cuts<comp_times->lp/10)) {
+         CglGomory *gomory = new CglGomory;
+         // TODO: change this to something based on number of cols, sparsity
+         // etc.
+         if (bc_level<1) {
+            gomory->setLimitAtRoot(100);
+            gomory->setLimit(100);
+         } else {
+            gomory->setLimitAtRoot(100);
+            gomory->setLimit(100);
+         }
+         gomory->generateCuts(*(lp_data->si), cutlist);
+         if ((new_cut_num = cutlist.sizeCuts() - cut_num) > 0) {
+            if (is_top_iter){
+               par->gomory_generated_in_root = TRUE;
+            }
+            PRINT(verbosity, 4,
+                  ("%i Gomory cuts added\n", new_cut_num));
+            lp_stat->cuts_generated += new_cut_num;
+            lp_stat->gomory_cuts += new_cut_num;
+            if (is_rootnode) {
+               lp_stat->cuts_root   += new_cut_num;
+               lp_stat->gomory_cuts_root += new_cut_num;
+            }
+         }
+         cut_num = cutlist.sizeCuts();       
+         delete gomory;
+         cut_time = used_time(&total_time);
+         comp_times->cuts += cut_time;
+         comp_times->gomory_cuts += cut_time;
       }
+   }
+   //printf("gomory time = %f, lp time = %f\n",comp_times->gomory_cuts, comp_times->lp); 
+
+   /* create CGL flow cover cuts */
+   should_generate_this_cgl_cut(cut_num, max_cuts_before_resolve, 
+         par->generate_cgl_flowcover_cuts, 
+         par->generate_cgl_flowcover_cuts_freq, bc_level, bc_index, 
+         lp_stat->flowcover_cuts_root, &should_generate);
+   if (should_generate==TRUE) {
+      CglFlowCover *flow = new CglFlowCover;
+      /* numFlowCuts_ is a static variable! needs to be reset */
+      flow->setNumFlowCuts(0);
+      flow->generateCuts(*(lp_data->si), cutlist);
+      if ((new_cut_num = cutlist.sizeCuts() - cut_num) > 0) {
+         if (is_top_iter){
+            par->flowcover_generated_in_root = TRUE;
+         }
+         PRINT(verbosity, 4,
+               ("%i flow cover cuts added\n", new_cut_num));
+         lp_stat->cuts_generated += new_cut_num;
+         lp_stat->flowcover_cuts += new_cut_num;
+         if (is_rootnode) {
+            lp_stat->cuts_root   += new_cut_num;
+            lp_stat->flowcover_cuts_root += new_cut_num;
+         }
+      }
+      cut_num = cutlist.sizeCuts();       
+      delete flow;
+      cut_time = used_time(&total_time);
+      comp_times->cuts += cut_time;
+      comp_times->flowcover_cuts += cut_time;
+   }
+
+   /* create CGL twomir cuts */
+   should_generate_this_cgl_cut(cut_num, max_cuts_before_resolve, 
+				par->generate_cgl_twomir_cuts, 
+				par->generate_cgl_twomir_cuts_freq, 
+				bc_level, bc_index, 
+				lp_stat->twomir_cuts_root, &should_generate);
+   if (should_generate==TRUE) {				     
+      CglTwomir *twomir = new CglTwomir;
+      twomir->setMaxElements (100);
+      twomir->setCutTypes (TRUE, TRUE, TRUE, TRUE);
+       twomir->generateCuts(*(lp_data->si), cutlist);
+       if ((new_cut_num = cutlist.sizeCuts() - cut_num) > 0) {
+	  if (is_top_iter){
+	     par->twomir_generated_in_root = TRUE;
+	  }
+	  PRINT(verbosity, 4,
+		("%i 2-MIR cuts added\n", new_cut_num));
+           lp_stat->cuts_generated += new_cut_num;
+           lp_stat->twomir_cuts += new_cut_num;
+           if (is_rootnode) {
+              lp_stat->cuts_root   += new_cut_num;
+              lp_stat->twomir_cuts_root += new_cut_num;
+           }
+       }
+       cut_num = cutlist.sizeCuts();       
+       delete twomir;
+       cut_time = used_time(&total_time);
+       comp_times->cuts += cut_time;
+       comp_times->twomir_cuts += cut_time;
+     }
    }
 
    /* create CGL redsplit cuts */
@@ -3484,76 +3913,63 @@ void generate_cgl_cuts(LPdata *lp_data, int *num_cuts, cut_data ***cuts,
 	 is_top_iter){
 
 	/* make basis ready first */
-	//termcode = dual_simplex(lp_data, &iterd);	
+	termcode = dual_simplex(lp_data, &iterd);	
 	CglRedSplit *redsplit = new CglRedSplit;
 	redsplit->generateCuts(*si, cutlist);
-	if ((new_cut_num = cutlist.sizeRowCuts() - cut_num) > 0) {
+	if ((new_cut_num = cutlist.sizeCuts() - cut_num) > 0) {
 	   if (is_top_iter){
 	      par->redsplit_generated_in_root = TRUE;
 	   }
-	   PRINT(verbosity, 5,
+	   PRINT(verbosity, 4,
 		 ("%i reduce and split cuts added\n", new_cut_num));
+           lp_stat->cuts_generated += new_cut_num;
+           lp_stat->redsplit_cuts += new_cut_num;
+           if (is_rootnode) {
+              lp_stat->cuts_root   += new_cut_num;
+              lp_stat->redsplit_cuts_root += new_cut_num;
+           }
 	}
-	cut_num = cutlist.sizeRowCuts();       
+	cut_num = cutlist.sizeCuts();       
 	delete redsplit;
-     }
-   }
-
-   /* create CGL knapsack cuts */
-   if(par->generate_cgl_knapsack_cuts > -1 && 
-      par->generate_cgl_knapsack_cuts_freq > 0){
-     if(par->generate_cgl_knapsack_cuts == GENERATE_ALWAYS || 
-	 (par->generate_cgl_knapsack_cuts == GENERATE_ONLY_IN_ROOT &&
-	  is_rootnode && par->knapsack_generated_in_root) || 
-	((par->generate_cgl_knapsack_cuts == GENERATE_DEFAULT ||
-	  par->generate_cgl_knapsack_cuts == GENERATE_IF_IN_ROOT) &&
-	 par->knapsack_generated_in_root) ||
-	(par->generate_cgl_knapsack_cuts == GENERATE_PERIODICALLY &&
-	 (lp_data->lp_count % par->generate_cgl_knapsack_cuts_freq == 0)) ||
-	 is_top_iter){	
-	CglKnapsackCover *knapsack = new CglKnapsackCover;
-	knapsack->generateCuts(*si, cutlist);
-       if ((new_cut_num = cutlist.sizeRowCuts() - cut_num) > 0) {
-	  if (is_top_iter){
-	     par->knapsack_generated_in_root = TRUE;
-	  }
-	  PRINT(verbosity, 5,
-		("%i knapsack cuts added\n", new_cut_num));
-       }
-       cut_num = cutlist.sizeRowCuts();       
-       delete knapsack;
+        cut_time = used_time(&total_time);
+        comp_times->cuts += cut_time;
+        comp_times->redsplit_cuts += cut_time;
      }
    }
 
    /* create CGL odd hole cuts */
-   if(par->generate_cgl_oddhole_cuts > -1 && 
-      par->generate_cgl_oddhole_cuts_freq > 0){
-     if(par->generate_cgl_oddhole_cuts == GENERATE_ALWAYS || 
-	 (par->generate_cgl_oddhole_cuts == GENERATE_ONLY_IN_ROOT &&
-	  is_rootnode && par->oddhole_generated_in_root) || 
-	((par->generate_cgl_oddhole_cuts == GENERATE_DEFAULT ||
-	  par->generate_cgl_oddhole_cuts == GENERATE_IF_IN_ROOT) &&
-	 par->oddhole_generated_in_root) ||
-	(par->generate_cgl_oddhole_cuts == GENERATE_PERIODICALLY &&
-	 (lp_data->lp_count % par->generate_cgl_oddhole_cuts_freq == 0)) ||
-	 is_top_iter){
-				     
-       CglOddHole *oddhole = new CglOddHole;
-       //#if 0
+   should_generate_this_cgl_cut(cut_num, max_cuts_before_resolve, 
+				par->generate_cgl_oddhole_cuts, 
+				par->generate_cgl_oddhole_cuts_freq, 
+				bc_level, bc_index, 
+				lp_stat->oddhole_cuts_root, 
+				&should_generate);
+   if (should_generate==TRUE) {		     
+      CglOddHole *oddhole = new CglOddHole;
+      //#if 0
        oddhole->setMinimumViolation(0.005);
        oddhole->setMinimumViolationPer(0.00002);
        oddhole->setMaximumEntries(200);
        //#endif
        oddhole->generateCuts(*si, cutlist);
-       if ((new_cut_num = cutlist.sizeRowCuts() - cut_num) > 0) {
+       if ((new_cut_num = cutlist.sizeCuts() - cut_num) > 0) {
 	  if (is_top_iter){ 
 	     par->oddhole_generated_in_root = TRUE;
 	  }
-	  PRINT(verbosity, 5,
+	  PRINT(verbosity, 4,
 		("%i odd hole cuts added\n", new_cut_num));
+           lp_stat->cuts_generated += new_cut_num;
+           lp_stat->oddhole_cuts += new_cut_num;
+           if (is_rootnode) {
+              lp_stat->cuts_root   += new_cut_num;
+              lp_stat->oddhole_cuts_root += new_cut_num;
+           }
        }
-       cut_num = cutlist.sizeRowCuts();       
+       cut_num = cutlist.sizeCuts();       
        delete oddhole;
+       cut_time = used_time(&total_time);
+       comp_times->cuts += cut_time;
+       comp_times->oddhole_cuts += cut_time;
      }
    }
 
@@ -3571,162 +3987,103 @@ void generate_cgl_cuts(LPdata *lp_data, int *num_cuts, cut_data ***cuts,
 	 is_top_iter){
 				     
 	 CglMixedIntegerRounding *mir = new CglMixedIntegerRounding;
+         if (bc_level<6) {
+            mir->setMAXAGGR_(5); // default __seems__ 1
+         } 
 	 mir->generateCuts(*si, cutlist);
-	 if ((new_cut_num = cutlist.sizeRowCuts() - cut_num) > 0) {
+	 if ((new_cut_num = cutlist.sizeCuts() - cut_num) > 0) {
 	    if (is_top_iter){
 	       par->mir_generated_in_root = TRUE;
 	    }
-	    PRINT(verbosity, 5,
+	    PRINT(verbosity, 4,
 		  ("%i MIR cuts added\n", new_cut_num));
+           lp_stat->cuts_generated += new_cut_num;
+           lp_stat->mir_cuts += new_cut_num;
+           if (is_rootnode) {
+              lp_stat->cuts_root   += new_cut_num;
+              lp_stat->mir_cuts_root += new_cut_num;
+           }
 	 }
-	 cut_num = cutlist.sizeRowCuts();       
+	 cut_num = cutlist.sizeCuts();       
 	 delete mir;
+         cut_time = used_time(&total_time);
+         comp_times->cuts += cut_time;
+         comp_times->mir_cuts += cut_time;
       }
    }
 
-   /* create CGL twomir cuts */
-   if(par->generate_cgl_twomir_cuts > -1 && lp_data->lp_count < 3 &&
-         par->generate_cgl_twomir_cuts_freq > 0){
-      if(par->generate_cgl_twomir_cuts == GENERATE_ALWAYS || 
-            (par->generate_cgl_twomir_cuts == GENERATE_ONLY_IN_ROOT &&
-             is_rootnode && par->twomir_generated_in_root) || 
-            ((par->generate_cgl_twomir_cuts == GENERATE_DEFAULT ||
-              par->generate_cgl_twomir_cuts == GENERATE_IF_IN_ROOT) &&
-             par->twomir_generated_in_root) ||
-            (par->generate_cgl_twomir_cuts == GENERATE_PERIODICALLY &&
-             (lp_data->lp_count % par->generate_cgl_twomir_cuts_freq == 0)) ||
-            is_top_iter){
-
-         CglTwomir *twomir = new CglTwomir;
-         twomir->setMaxElements (20);
-         twomir->setCutTypes (TRUE, TRUE, TRUE, TRUE);
-         //if (is_rootnode) {
-         //   twomir->setMaxElements (800+(int)0.2*lp_data->n);
-         //}
-         //twomir->setFormulationRows (1);
-
-         twomir->generateCuts(*si, cutlist);
-         if ((new_cut_num = cutlist.sizeRowCuts() - cut_num) > 0) {
-            if (is_top_iter){
-               par->twomir_generated_in_root = TRUE;
-            }
-            PRINT(verbosity, 5,
-                  ("%i 2-MIR cuts added\n", new_cut_num));
-         }
-         cut_num = cutlist.sizeRowCuts();       
-         delete twomir;
-      }
-   }
-
-   /* create CGL clique cuts */
-   if(par->generate_cgl_clique_cuts > -1 && 
-         par->generate_cgl_clique_cuts_freq > 0){
-      if(par->generate_cgl_clique_cuts == GENERATE_ALWAYS || 
-            (par->generate_cgl_clique_cuts == GENERATE_ONLY_IN_ROOT &&
-             is_rootnode && par->clique_generated_in_root) || 
-            ((par->generate_cgl_clique_cuts == GENERATE_DEFAULT ||
-              par->generate_cgl_clique_cuts == GENERATE_IF_IN_ROOT) &&
-             par->clique_generated_in_root) ||
-            (par->generate_cgl_clique_cuts == GENERATE_PERIODICALLY &&
-             (lp_data->lp_count % par->generate_cgl_clique_cuts_freq == 0)) ||
-            is_top_iter){
-
-         CglClique *clique = new CglClique;
-         clique->setStarCliqueReport(FALSE);
-         clique->setRowCliqueReport(FALSE);
-         clique->generateCuts(*si, cutlist);
-         if ((new_cut_num = cutlist.sizeRowCuts() - cut_num) > 0) {
-            if (is_top_iter){
-               par->clique_generated_in_root = TRUE;
-            }
-            PRINT(verbosity, 5,
-                  ("%i clique cuts added\n", new_cut_num));
-         }
-         cut_num = cutlist.sizeRowCuts();       
-         delete clique;
-      }
-   }
-   
-   /* create CGL flow cover cuts */
-   if(par->generate_cgl_flow_and_cover_cuts > -1 && 
-         par->generate_cgl_flow_and_cover_cuts_freq > 0){
-      if(par->generate_cgl_flow_and_cover_cuts == GENERATE_ALWAYS || 
-            (par->generate_cgl_flow_and_cover_cuts == GENERATE_ONLY_IN_ROOT &&
-             is_rootnode && par->flow_and_cover_generated_in_root) || 
-            ((par->generate_cgl_flow_and_cover_cuts == GENERATE_DEFAULT ||
-              par->generate_cgl_flow_and_cover_cuts == GENERATE_IF_IN_ROOT) &&
-             par->flow_and_cover_generated_in_root) ||
-            (par->generate_cgl_flow_and_cover_cuts == GENERATE_PERIODICALLY &&
-             (lp_data->lp_count % par->generate_cgl_flow_and_cover_cuts_freq 
-              == 0)) || is_top_iter){
-         CglFlowCover *flow = new CglFlowCover;
-         flow->generateCuts(*si, cutlist);
-         if ((new_cut_num = cutlist.sizeRowCuts() - cut_num) > 0) {
-            if (is_top_iter){
-               par->flow_and_cover_generated_in_root = TRUE;
-            }
-            PRINT(verbosity, 5,
-                  ("%i flow cover cuts added\n", new_cut_num));
-         }
-         cut_num = cutlist.sizeRowCuts();       
-         delete flow;
-         //printf("%i\n", cutlist.sizeRowCuts());
-      }
-   }
 
    /* create CGL simple rounding cuts */
    if(par->generate_cgl_rounding_cuts > -1 && 
-         par->generate_cgl_rounding_cuts_freq > 0){
-      if(par->generate_cgl_rounding_cuts == GENERATE_ALWAYS || 
-            (par->generate_cgl_rounding_cuts == GENERATE_ONLY_IN_ROOT &&
-             is_rootnode && par->rounding_generated_in_root) || 
-            ((par->generate_cgl_rounding_cuts == GENERATE_DEFAULT ||
-              par->generate_cgl_rounding_cuts == GENERATE_IF_IN_ROOT) &&
-             par->rounding_generated_in_root) ||
-            (par->generate_cgl_rounding_cuts == GENERATE_PERIODICALLY &&
-             (lp_data->lp_count % par->generate_cgl_rounding_cuts_freq == 0)) ||
-            is_top_iter){
-
-         CglSimpleRounding * rounding = new CglSimpleRounding;
-         rounding->generateCuts(*si, cutlist);
-         if ((new_cut_num = cutlist.sizeRowCuts() - cut_num) > 0) {
-            if (is_top_iter){
-               par->rounding_generated_in_root = TRUE;
-            }
-            PRINT(verbosity, 5,
-                  ("%i rounding cuts added\n", new_cut_num));
-         }
-         cut_num = cutlist.sizeRowCuts();       
-         delete rounding;
-         //printf("%i\n", cutlist.sizeRowCuts());
-      }
+      par->generate_cgl_rounding_cuts_freq > 0){
+     if(par->generate_cgl_rounding_cuts == GENERATE_ALWAYS || 
+	 (par->generate_cgl_rounding_cuts == GENERATE_ONLY_IN_ROOT &&
+	  is_rootnode && par->rounding_generated_in_root) || 
+	((par->generate_cgl_rounding_cuts == GENERATE_DEFAULT ||
+	  par->generate_cgl_rounding_cuts == GENERATE_IF_IN_ROOT) &&
+	 par->rounding_generated_in_root) ||
+	(par->generate_cgl_rounding_cuts == GENERATE_PERIODICALLY &&
+	 (lp_data->lp_count % par->generate_cgl_rounding_cuts_freq == 0)) ||
+	 is_top_iter){
+				     
+       CglSimpleRounding * rounding = new CglSimpleRounding;
+       rounding->generateCuts(*(lp_data->si), cutlist);
+       if ((new_cut_num = cutlist.sizeCuts() - cut_num) > 0) {
+	  if (is_top_iter){
+	     par->rounding_generated_in_root = TRUE;
+	  }
+	  PRINT(verbosity, 4,
+		("%i rounding cuts added\n", new_cut_num));
+           lp_stat->cuts_generated += new_cut_num;
+           lp_stat->rounding_cuts += new_cut_num;
+           if (is_rootnode) {
+              lp_stat->cuts_root   += new_cut_num;
+              lp_stat->rounding_cuts_root += new_cut_num;
+           }
+       }
+       cut_num = cutlist.sizeCuts();       
+       delete rounding;
+       //printf("%i\n", cutlist.sizeCuts());
+       cut_time = used_time(&total_time);
+       comp_times->cuts += cut_time;
+       comp_times->rounding_cuts += cut_time;
+     }
    }
    
    /* create CGL liftandproject cuts (currently buggy) */     
    if(par->generate_cgl_lift_and_project_cuts > -1 && 
-         par->generate_cgl_lift_and_project_cuts_freq > 0){
-      if(par->generate_cgl_lift_and_project_cuts == GENERATE_ALWAYS || 
-            (par->generate_cgl_lift_and_project_cuts == GENERATE_ONLY_IN_ROOT &&
-             is_rootnode && par->lift_and_project_generated_in_root) || 
-            ((par->generate_cgl_lift_and_project_cuts == GENERATE_DEFAULT ||
-              par->generate_cgl_lift_and_project_cuts == GENERATE_IF_IN_ROOT) &&
-             par->lift_and_project_generated_in_root) ||
-            (par->generate_cgl_lift_and_project_cuts == GENERATE_PERIODICALLY &&
-             (lp_data->lp_count % par->generate_cgl_lift_and_project_cuts_freq 
-              == 0)) || is_top_iter){
-
-         CglLiftAndProject *liftandproject = new CglLiftAndProject;
-         liftandproject->generateCuts(*si, cutlist);
-         if ((new_cut_num = cutlist.sizeRowCuts() - cut_num) > 0) {
-            if (is_top_iter){
-               par->lift_and_project_generated_in_root = TRUE;
-            }
-            PRINT(verbosity, 5,
-                  ("%i lift and project cuts added\n", new_cut_num));
-         }
-         cut_num = cutlist.sizeRowCuts();       
-         delete liftandproject;
-      }
+      par->generate_cgl_lift_and_project_cuts_freq > 0){
+     if(par->generate_cgl_lift_and_project_cuts == GENERATE_ALWAYS || 
+	 (par->generate_cgl_lift_and_project_cuts == GENERATE_ONLY_IN_ROOT &&
+	  is_rootnode && par->lift_and_project_generated_in_root) || 
+	((par->generate_cgl_lift_and_project_cuts == GENERATE_DEFAULT ||
+	  par->generate_cgl_lift_and_project_cuts == GENERATE_IF_IN_ROOT) &&
+	 par->lift_and_project_generated_in_root) ||
+	(par->generate_cgl_lift_and_project_cuts == GENERATE_PERIODICALLY &&
+	 (lp_data->lp_count % par->generate_cgl_lift_and_project_cuts_freq == 0)) ||
+	 is_top_iter){
+				     
+	CglLiftAndProject *liftandproject = new CglLiftAndProject;
+	liftandproject->generateCuts(*(lp_data->si), cutlist);
+	if ((new_cut_num = cutlist.sizeCuts() - cut_num) > 0) {
+	   if (is_top_iter){
+	      par->lift_and_project_generated_in_root = TRUE;
+	   }
+	   PRINT(verbosity, 4,
+		 ("%i lift and project cuts added\n", new_cut_num));
+           lp_stat->cuts_generated += new_cut_num;
+           lp_stat->lift_and_project_cuts += new_cut_num;
+           if (is_rootnode) {
+              lp_stat->cuts_root   += new_cut_num;
+              lp_stat->lift_and_project_cuts_root += new_cut_num;
+           }
+	}
+	cut_num = cutlist.sizeCuts();       
+	delete liftandproject;
+        cut_time = used_time(&total_time);
+        comp_times->cuts += cut_time;
+        comp_times->lift_and_project_cuts += cut_time;
+     }
    }
    
    /* create CGL LandP cuts */
@@ -3748,9 +4105,6 @@ void generate_cgl_cuts(LPdata *lp_data, int *num_cuts, cut_data ***cuts,
 	(par->generate_cgl_landp_cuts == GENERATE_PERIODICALLY &&
 	 (lp_data->lp_count % par->generate_cgl_landp_cuts_freq == 0)) ||
 	 is_top_iter){
-
-
-
 	/* make basis ready first */
 	termcode = dual_simplex(lp_data, &iterd); 
 	/* 	if(termcode != 0){ 
@@ -3761,24 +4115,122 @@ void generate_cgl_cuts(LPdata *lp_data, int *num_cuts, cut_data ***cuts,
  	} */
 	CglLandP *landp = new CglLandP;
 	//landp->parameter().pivotLimit = 10;
-	landp->parameter().maxCutPerRound = 10;
+	landp->parameter().maxCutPerRound = 30;
 	landp->generateCuts(*si, cutlist);
-	if ((new_cut_num = cutlist.sizeRowCuts() - cut_num) > 0) {
+	if ((new_cut_num = cutlist.sizeCuts() - cut_num) > 0) {
 	   if (is_top_iter){
 	      par->landp_generated_in_root = TRUE;
 	   }
-	   PRINT(verbosity, 5,
+	   PRINT(verbosity, 4,
 		 ("%i landp cuts added\n", new_cut_num));
+           lp_stat->cuts_generated += new_cut_num;
+           lp_stat->landp_cuts += new_cut_num;
+           if (is_rootnode) {
+              lp_stat->cuts_root   += new_cut_num;
+              lp_stat->landp_cuts_root += new_cut_num;
+           }
 	}
-	cut_num = cutlist.sizeRowCuts();       
+	cut_num = cutlist.sizeCuts();       
 	delete landp;
+        cut_time = used_time(&total_time);
+        comp_times->cuts += cut_time;
+        comp_times->landp_cuts += cut_time;
      }
    }
 #endif
 
+#endif
+
+   return;
+}
+
+
+/*===========================================================================*/
+int should_generate_this_cgl_cut(int cut_num, int max_cuts_before_resolve, 
+      int generation_flag, int freq, int bc_level, 
+      int bc_index, int cuts_in_root, int *should_generate) 
+{
+   if (cut_num > max_cuts_before_resolve) {
+      *should_generate = FALSE;
+      return 0;
+   }
+   switch (generation_flag) {
+    case (GENERATE_DEFAULT):
+      if (freq>0 && (bc_level<6 || bc_index % freq == 0)) {
+         *should_generate = TRUE;
+      } else {
+         *should_generate = FALSE;
+      }
+      break;
+    case (GENERATE_ALWAYS):
+      *should_generate = TRUE;
+      break;
+    case (GENERATE_ONLY_IN_ROOT):
+      if (bc_level<1) {
+         *should_generate = TRUE;
+      } else {
+         *should_generate = FALSE;
+      }
+      break;
+    case (GENERATE_IF_IN_ROOT):
+      if (bc_level<1) {
+         *should_generate = TRUE;
+      } else if (cuts_in_root>0 && bc_index % freq == 0) {
+         *should_generate = TRUE;
+      } else {
+         *should_generate = FALSE;
+      }
+      break;
+    case (GENERATE_PERIODICALLY):
+      if (bc_index % freq == 0) {
+         *should_generate = TRUE;
+      } else {
+         *should_generate = FALSE;
+      }
+      break;
+    default:
+      *should_generate = FALSE;
+   }
+   return 0;
+}
+
+
+/*===========================================================================*/
+int check_cuts(OsiCuts &cutlist, LPdata *lp_data, int bc_level, int
+      *num_cuts, cut_data ***cuts, char send_to_pool, int *bnd_changes, 
+      lp_stat_desc *lp_stat, node_times *comp_times, int verbosity)
+{
+#if 0
+   //OsiCuts cutlist = *cutlist_p;
+   OsiRowCut cut;
+   int i, j, k, sizeColCuts;
+   var_desc             **vars = lp_data->vars;
+   double cut_time, total_time;
+   /* twice is necessary */
+   cut_time = used_time(&total_time);
+   cut_time = used_time(&total_time);
    if (cutlist.sizeRowCuts() > 0){
       int num_discarded_cuts = 0;
-      int *tmp_matind = (int*)malloc(ISIZE*lp_data->n);
+      int num_unviolated_cuts = 0;
+      int num_duplicate_cuts = 0;
+      int *tmp_matind = lp_data->tmp.i1;
+      int *is_deleted = (int *) calloc(cutlist.sizeRowCuts(), ISIZE);
+      double *hashes  = (double *) malloc(cutlist.sizeRowCuts()* DSIZE);
+      int num_elements, num_elements2;
+      int *indices, *indices2;
+      double *elements, *elements2;
+      double min_coeff, max_coeff;
+      int discard_cut, is_duplicate;
+      double rhs, rhs2;
+      const double max_elements = (bc_level < 1) ? 100 : 100;
+      double hash_value, violation;
+      double *random_hash = lp_data->random_hash;
+      const double *x = lp_data->x;
+      const double lpetol = lp_data->lpetol;
+      const double etol1000 = lpetol*1000;
+      double *matval;
+      int *matind;
+         
       if (*cuts){
 	 *cuts = (cut_data **)realloc(*cuts, (*num_cuts+cutlist.sizeRowCuts())
 				      * sizeof(cut_data *));
@@ -3787,25 +4239,31 @@ void generate_cgl_cuts(LPdata *lp_data, int *num_cuts, cut_data ***cuts,
       }
              
       for (i = 0, j = *num_cuts; i < cutlist.sizeRowCuts(); i++){
-	 int num_elements;
-	 int *indices;
-	 double *elements;
-	 double min_coeff = DBL_MAX;
-	 double max_coeff = 0;
-	 int discard_cut = FALSE;
-	 double rhs;
-         
          cut = cutlist.rowCut(i);
          num_elements = cut.row().getNumElements();
          indices = const_cast<int *> (cut.row().getIndices());
          elements = const_cast<double *> (cut.row().getElements());
          rhs = cut.rhs();
+         discard_cut = FALSE;
+         max_coeff = 0;
+         min_coeff = DBL_MAX;
+
+         if (num_elements > max_elements) {
+            is_deleted[i] = TRUE;
+            PRINT(verbosity,5,("Threw out cut because its length %d is too "
+                     "high.\n\n\n", num_elements));
+            num_discarded_cuts++;
+            continue;
+         }
 
 	 /* 
 	  * Find the largest and the smallest non-zero coeffs to test the
 	  * numerical stability of the cut
+          * also calculate the hash value
 	  */
 
+         hash_value = 0;
+         violation = 0;
 	 for (int el_num=0; el_num<num_elements; el_num++) {
 	    if (fabs(elements[el_num])>max_coeff) {
 	       max_coeff = fabs(elements[el_num]);
@@ -3813,10 +4271,12 @@ void generate_cgl_cuts(LPdata *lp_data, int *num_cuts, cut_data ***cuts,
 	    if (fabs(elements[el_num]) < min_coeff) {
 	       min_coeff = fabs(elements[el_num]);
 	    }
-	    tmp_matind[el_num] = lp_data->vars[indices[el_num]]->userind;
+	    tmp_matind[el_num] = vars[indices[el_num]]->userind;
+            hash_value += elements[el_num]*random_hash[tmp_matind[el_num]];
+            violation += elements[el_num]*x[tmp_matind[el_num]];
 	 }
          /* see rhs as well */
-         if (fabs(rhs) > lp_data->lpetol) {
+         if (fabs(rhs) > lpetol) {
             if (fabs(rhs) < min_coeff) { 
                min_coeff = fabs(rhs);
             }
@@ -3824,14 +4284,18 @@ void generate_cgl_cuts(LPdata *lp_data, int *num_cuts, cut_data ***cuts,
                max_coeff = fabs(rhs);
             }
          }
-	 if (num_elements>0) {
-	    if ( (max_coeff > 0 && min_coeff/max_coeff < 100*lp_data->lpetol)||
-	         (min_coeff > 0 && min_coeff<1000*lp_data->lpetol) ) {
-	       num_discarded_cuts++;
-	       discard_cut = TRUE;
-               num_discarded_cuts++;
-	    }
-	 }
+         switch (cut.sense()) {
+          case 'L':
+            violation -= rhs;
+            break;
+          case 'G':
+            violation = rhs - violation;
+            break;
+          case 'E':
+            violation = fabs(rhs - violation);
+            break;
+         }
+
 	 /*
 	  * display the cut
 	  */
@@ -3842,20 +4306,65 @@ void generate_cgl_cuts(LPdata *lp_data, int *num_cuts, cut_data ***cuts,
 	       PRINT(12,11,("%d\t%f\n",indices[el_num],elements[el_num]));
 	    }
 	 }
-	 PRINT(verbosity,8,("generate_cgl_cuts: Number of Coefficients = "
+	 PRINT(verbosity,5,("generate_cgl_cuts: Number of Coefficients = "
                   "%d\tMax = %f, Min = %f\n",num_elements,max_coeff, 
                   min_coeff));
    
+         if (violation < lpetol) {
+            num_unviolated_cuts++;
+            discard_cut = TRUE;
+            PRINT(verbosity,5,("violation = %f. Threw out cut.\n\n", 
+                     violation));
+         }
+
+	 if (discard_cut != TRUE && num_elements>0) {
+	    if ( (max_coeff > 0 && min_coeff/max_coeff < etol1000)||
+	         (min_coeff > 0 && min_coeff < etol1000) ) {
+               num_discarded_cuts++;
+	       discard_cut = TRUE;
+               PRINT(verbosity,5,("Threw out cut because of bad coeffs.\n\n"));
+	    }
+	 }
 	 if (discard_cut==TRUE) {
-            PRINT(verbosity,8,("Threw out cut.\n\n\n"));
+            is_deleted[i] = TRUE;
             continue;
          }
+
+         /* check for duplicates */
+         if (num_elements>0) {
+            is_duplicate = FALSE;
+            /* check against last 50 cuts only. otherwise, takes a lot of time
+             */
+            /* for (k = j-1; k > MAX(-1,j-51); k--) */
+            for (k=j-1; k>-1; k--) {
+               num_elements2 = ((int *) ((*cuts)[k]->coef))[0];
+               rhs2 = (*cuts)[k]->rhs;
+               if (num_elements2 != num_elements || 
+                   fabs(rhs2 - rhs) > lpetol || 
+                   fabs(hashes[k]-hash_value) > lpetol) {
+                  continue;
+               } else {
+                  break;
+               }
+            }
+            /* if (k>MAX(-1,i-51)) */
+            if (k>-1) {
+               is_deleted[i] = TRUE;
+               PRINT(verbosity,5,("cut #%d is same as accepted cut #%d\n",i,k));
+               num_duplicate_cuts++;
+               continue;
+            }
+         }
+
 	 (*cuts)[j] =  (cut_data *) calloc(1, sizeof(cut_data));
 	 (*cuts)[j]->type = EXPLICIT_ROW;
 	 if (((*cuts)[j]->sense = cut.sense()) == 'R'){
 	    FREE((*cuts)[j]);
 	    continue; /* This must be a bug. */
 	 }
+         hashes[j] = hash_value;
+         PRINT(verbosity, 12, ("Cut #%i: accepted as cut number %i\n", i, j));
+
 	 (*cuts)[j]->rhs = rhs;
 	 (*cuts)[j]->range = cut.range();
 	 (*cuts)[j]->size = (num_elements + 1) * (ISIZE + DSIZE);
@@ -3882,10 +4391,56 @@ void generate_cgl_cuts(LPdata *lp_data, int *num_cuts, cut_data ***cuts,
       if (num_discarded_cuts>0) {
 	 PRINT(verbosity,3,("generate_cgl_cuts: Number of discarded cuts = %d\n",num_discarded_cuts));
       }
-      FREE(tmp_matind);
+      lp_stat->num_poor_cuts += num_discarded_cuts;
+      lp_stat->num_unviolated_cuts += num_unviolated_cuts;
+      if (num_duplicate_cuts>0) {
+	 PRINT(verbosity,3,("generate_cgl_cuts: Number of duplicate cuts = %d\n",num_duplicate_cuts));
+      }
+      lp_stat->num_duplicate_cuts += num_duplicate_cuts;
+      FREE(is_deleted);
+      FREE(hashes);
    }
-   return;
+
+   sizeColCuts = cutlist.sizeColCuts();
+   if (sizeColCuts > 0){
+      PRINT(verbosity,3,("cgl_generate_cuts: %d colCuts found\n",sizeColCuts));
+      OsiColCut colCut;
+      const int *indices;
+      const double *elements;
+      for (i=0;i<sizeColCuts;i++) {
+         colCut = cutlist.colCut(i);
+         if (verbosity>10) {
+            colCut.print();
+         }
+         indices  = colCut.lbs().getIndices();
+         elements = colCut.lbs().getElements();
+         for (j=0;j<colCut.lbs().getNumElements();j++) {
+            if (vars[indices[j]]->new_lb < elements[j]) {
+               vars[indices[j]]->new_lb = elements[j];
+               change_lbub(lp_data, indices[j], elements[j], 
+                     vars[indices[j]]->new_ub);
+               (*bnd_changes)++;
+            }
+         }
+         indices  = colCut.ubs().getIndices();
+         elements = colCut.ubs().getElements();
+         for (j=0;j<colCut.ubs().getNumElements();j++) {
+            if (vars[indices[j]]->new_ub > elements[j]) {
+               vars[indices[j]]->new_ub = elements[j];
+               change_lbub(lp_data, indices[j], vars[indices[j]]->new_lb,
+                     elements[j]);
+               (*bnd_changes)++;
+            }
+         }
+      }
+      //exit(0);
+   }
+   cut_time = used_time(&total_time);
+   comp_times->dupes_and_bad_coeffs_in_cuts += cut_time;
+#endif
+   return 0;
 }
 #endif
-
 #endif /* __OSI_xxx__ */
+/*===========================================================================*/
+/*===========================================================================*/

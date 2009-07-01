@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -180,6 +180,8 @@ typedef struct LPDATA{
    int        maxm;
    int        nz;          /* number of nonzeros */
    int        maxnz;       /* space is allocated for this many nonzeros */
+   double    *random_hash;
+   double    *heur_solution; /* space for heur solution */
 
    char       ordering;    /* COLIND_AND_USERIND_ORDERED, COLIND_ORDERED or
 			      USERIND_ORDERED */
@@ -221,6 +223,8 @@ void size_lp_arrays PROTO((LPdata *lp_data, char do_realloc, char set_max,
 void open_lp_solver PROTO((LPdata *lp_data));
 void close_lp_solver PROTO((LPdata *lp_data));
 void load_lp_prob PROTO((LPdata *lp_data, int scaling, int fastmip));
+int reset_lp_prob PROTO ((LPdata *lp_data, int scaling, int fastmip));
+int save_lp PROTO((LPdata *lp_data));
 void unload_lp_prob PROTO((LPdata *lp_data));
 void load_basis PROTO((LPdata *lp_data, int *cstat, int *rstat));
 void refactorize PROTO((LPdata *lp_data));
@@ -233,6 +237,7 @@ void change_row PROTO((LPdata *lp_data, int row_ind,
 		       char sense, double rhs, double range));
 void change_col PROTO((LPdata *lp_data, int col_ind,
 		       char sense, double lb, double ub));
+int initial_lp_solve PROTO((LPdata *lp_data, int *iterd));
 int dual_simplex PROTO((LPdata *lp_data, int *iterd));
 int solve_hotstart PROTO((LPdata *lp_data, int *iterd));
 int mark_hotstart PROTO((LPdata *lp_data));
@@ -266,7 +271,13 @@ void get_ub PROTO((LPdata *lp_data, int j, double *ub));
 void get_lb PROTO((LPdata *lp_data, int j, double *lb));
 void get_bounds PROTO((LPdata *lp_data));
 void get_objcoef PROTO((LPdata *lp_data, int j, double *objcoef));
+void get_objcoeffs(LPdata *lp_data);
+void change_objcoeff(LPdata *lp_data, const int* indexFirst, 
+      const int* indexLast, double *coeffs);
+void get_rhs_rng_sense(LPdata *lp_data);
+int copy_lp_data(LPdata *lp_data, LPdata *new_data);
 void delete_rows PROTO((LPdata *lp_data, int deletable, int *free_rows));
+void delete_rows_with_ind PROTO((LPdata *lp_data, int deletable, int *rowind));
 int delete_cols PROTO((LPdata *lp_data, int delnum, int *delstat));
 void release_var PROTO((LPdata *lp_data, int j, int where_to_move));
 void free_row_set PROTO((LPdata *lp_data, int length, int *index));
@@ -278,9 +289,24 @@ void write_mip_desc_mps PROTO((MIPdesc *mip, char *fname));
 void write_mip_desc_lp PROTO((MIPdesc *mip, char *fname));
 void write_sav PROTO((LPdata *lp_data, char *fname));
 #ifdef USE_CGL_CUTS
+void generate_cgl_cuts(LPdata *lp_data, int *num_cuts, cut_data ***cuts,
+		       char send_to_pool, int bc_index, int bc_level, 
+                       int node_iter_limit, int max_cuts_before_resolve,
+                       double ub, int *bnd_changes,
+                       lp_stat_desc *lp_stat, node_times *comp_times,
+                       int verbosity);
+int check_cuts(OsiCuts &cutlist, LPdata *lp_data, int bc_level, int
+      *num_cuts, cut_data ***cuts, char send_to_pool, int *bnd_changes, 
+      lp_stat_desc *lp_stat, node_times *compe_times, int verbosity);
+int should_generate_this_cgl_cut(int cut_num, int max_cuts_before_resolve, 
+      int generation_flag, int freq, int bc_level, int bc_index, 
+      int cuts_in_root, int *should_generate);
+/*
 void generate_cgl_cuts PROTO((LPdata * lp_data, int *num_cuts,
 			      cut_data ***cuts, char send_to_pool,
-			      int is_rootnode, int verbosity));
+			      int is_rootnode, lp_stat_desc *lp_stat, 
+                              node_times *comp_times, int verbosity));
+*/
 #endif
 #ifdef USE_GLPMPL
 int read_gmpl PROTO((MIPdesc *mip, char *modelfile, char *datafile,

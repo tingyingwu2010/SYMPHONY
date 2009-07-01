@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -38,6 +38,12 @@
    elapsed -= (double)seconds;                                               \
    msec = (int)(elapsed*100.0);                                              \
    fprintf(f, "%.2d:%.2d:%.2d:%.2d ", hours, minutes, seconds, msec);         \
+}
+
+/* PRINT_TIME function when vbc_emulation = 3 */
+#define PRINT_TIME2(tm, f) { /* Print the elapsed time in vbctool format*/    \
+   double elapsed_t = wall_clock(NULL) - tm->start_time;                       \
+   fprintf(f, "%10.6f ", elapsed_t);         \
 }
 
 #define	TVCLEAR(tvp)	(tvp.tv_sec = tvp.tv_usec = 0)

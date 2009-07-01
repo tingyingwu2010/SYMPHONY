@@ -4,9 +4,9 @@
 /* SYMPHONY Branch, Cut, and Price Library. This application is a solver for */
 /* Capacitated Network Routing Problems.                                     */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
-/* This application was developed by Ted Ralphs (tkralphs@lehigh.edu)        */
+/* This application was developed by Ted Ralphs (ted@lehigh.edu)             */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -47,6 +47,19 @@ typedef struct CG_CNRP_SPEC{
    double       *cut_val;
    char         *cut_list;
 
+/*__BEGIN_EXPERIMENTAL_SECTION__*/
+   int          *dec_data;
+   int           last_decomp_index;
+   double        last_objval;
+   FILE         *decomp_res; 
+   /* the next four arrays pertain to storing no-columns cuts - kind of an
+      auxiliary  cutpool*/ 
+   int         **data;
+   char        **indicators;
+   int          *ones;
+   int          *size;
+   int           num_nocolscuts;
+/*___END_EXPERIMENTAL_SECTION___*/
 
 #ifdef CHECK_CUT_VALIDITY
    int           feas_sol_size;

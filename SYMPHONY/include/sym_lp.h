@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -37,13 +37,6 @@
 #endif
 
 /*===========================================================================*/
-
-#ifdef PRINT
-#undef PRINT
-#endif
-#define PRINT(a, b, c) \
-   if ((a) > (b)) printf c
-
 /*===========================================================================*/
 
 typedef struct OUR_COL_SET{
@@ -68,14 +61,18 @@ typedef struct OUR_COL_SET{
 
 /*===========================================================================*/
 typedef struct LP_PROB{
+   double       str_time;
+
    int           proc_index;
    void         *user;
 
    lp_params     par;
 
-   char          has_ub;
+   int           has_ub;
    double        ub;
 
+   double        root_objval;
+   
    int           phase;
 
    double        start_time;
@@ -83,6 +80,7 @@ typedef struct LP_PROB{
    base_desc     base;
 
    branch_desc  *bdesc;        /* there are p->bc_level branch_desc's */
+   bounds_change_desc *bnd_changes; /* there are p->bc_level bnd_change's */
    int           bdesc_size;
 
    int           master;
@@ -100,11 +98,12 @@ typedef struct LP_PROB{
    lp_sol        best_sol;
    double        obj[2];
    double        utopia[2];
-   char          has_mc_ub;
+   int           has_mc_ub;
    double        mc_ub;
    
    double        tt;
    node_times    comp_times;
+   lp_stat_desc  lp_stat;
 
    node_desc    *desc;
    int           bc_index;
@@ -113,19 +112,25 @@ typedef struct LP_PROB{
    int           vars_at_lb;
    int           vars_deletable; /* a subset of vars at LB */
 
-   char          dive;
-   char          colgen_strategy;
+   int           dive;
+   int           colgen_strategy;
    char          colgen_happened;
    char          colset_changed;
 
    int           iter_num;
    int           node_iter_num;
+   int           bound_changes_in_iter;
    int           vars_recently_fixed_to_ub;
    LPdata       *lp_data;
    MIPdesc      *mip; /* Holds the MIP description when read in from MPS */
    
    double        last_gap;
    double       *obj_history;
+   int           has_tailoff;
+   int           obj_no_impr_iters;
+
+   //double        str_br_impr_count; /* if we dont have 3 consequent
+   //				       improvements, return to initials */
 
    /*========================================================================*\
     * The following fields refer to the cuts/rows arrived to the LP,
@@ -144,6 +149,20 @@ typedef struct LP_PROB{
    int         slack_cut_num;
    cut_data  **slack_cuts;
    int         slack_cuts_size;
+
+   /* pseudo costs and reliability measures */
+   double         *pcost_down;
+   double         *pcost_up;
+   int            *br_rel_down;
+   int            *br_rel_up;
+   int            *br_rel_cand_list;
+   char            str_br_check;
+   int            *br_rel_down_min_level;
+   int            *br_rel_up_min_level;   
+   double          str_check_obj;
+   int             str_check_trial;
+   int             str_check_freq;
+   int             str_check_cnt;
 }lp_prob;
 
 /*===========================================================================*/
@@ -154,6 +173,7 @@ lp_prob *get_lp_ptr PROTO((lp_prob **lp_list));
 int lp_initialize PROTO((lp_prob *p, int master_tid));
 int process_chain PROTO((lp_prob *p));
 int fathom_branch PROTO((lp_prob *p));
+int check_bounds PROTO((lp_prob *p, int *termcode));
 int fathom PROTO((lp_prob *p, int primal_feasible));
 int repricing PROTO((lp_prob *p));
 int bfind PROTO((int key, int *table, int size));
@@ -167,6 +187,18 @@ int local_search PROTO((lp_prob *p, double *solution_value,
 			double *col_solution, double *better_solution));
 void lp_exit PROTO((lp_prob *p));
 void lp_close PROTO((lp_prob *p));
+int generate_cgl_cuts_new PROTO((lp_prob *p, int *num_cuts, cut_data ***cuts, 
+      int send_to_pool, int *bound_changes));
+int should_use_cgl_generator PROTO ((lp_prob *p, int *should_generate, 
+      int which_generator, void *generator));
+int generate_cgl_cut_of_type PROTO((lp_prob *p, int i, OsiCuts *cutlist_p, 
+         int *was_tried));
+int check_and_add_cgl_cuts PROTO((lp_prob *p, int i, cut_data ***cuts, int *num_cuts, int *bound_changes, OsiCuts *cutlist, int send_to_pool));
+int should_stop_adding_cgl_cuts PROTO((lp_prob *p, int i, int *should_stop));
+int add_col_cuts PROTO((lp_prob *p, OsiCuts *cutlist, int *bound_changes));
+int update_pcost PROTO ((lp_prob *p));
+int str_br_bound_changes PROTO((lp_prob *p, int num_bnd_changes, 
+         double *bnd_val, int *bnd_ind, char *bnd_sense));
 
 /*===========================================================================*/
 /*======== LP functions related to variable management (lp_varfunc.c) =======*/
@@ -176,6 +208,8 @@ void add_col_set PROTO((lp_prob *p, our_col_set *new_cols));
 void colind_sort_extra PROTO((lp_prob *p));
 void userind_sort_extra PROTO((lp_prob *p));
 void tighten_bounds PROTO((lp_prob *p));
+int save_root_reduced_costs(lp_prob *p);
+int tighten_root_bounds(lp_prob *p);
 our_col_set *price_all_vars PROTO((lp_prob *p));
 int restore_lp_feasibility PROTO((lp_prob *p, our_col_set *new_cols));
 void userind_sort_extra PROTO((lp_prob *p));
@@ -209,6 +243,12 @@ int add_violated_slacks PROTO((lp_prob *p, int cand_num,
 			       branch_obj **candidates));
 int select_branching_object PROTO((lp_prob *p, int *cuts,
 				   branch_obj **can));
+int should_continue_strong_branching PROTO((lp_prob *p, int i, int cand_num,
+                                     double st_time, int total_iters, 
+                                     int *should_continue));
+int strong_branch(lp_prob *p, int branch_var, double lb, double ub, 
+		  double new_lb, double new_ub, double *obj, int should_use_hot_starts, 
+                  int *termstatus, int *iterd);
 int branch PROTO((lp_prob *p, int cuts));
 int col_gen_before_branch PROTO((lp_prob *p, int *new_vars));
 
@@ -222,7 +262,6 @@ void branch_close_to_half_and_expensive PROTO((lp_prob *p, int max_cand_num,
 void branch_close_to_one_and_cheap PROTO((lp_prob *p, int max_cand_num,
 					  int *cand_num,
 					  branch_obj ***candidates));
-
 /*===========================================================================*/
 /*================ LP communication functions (lp_proccomm.c) ===============*/
 /*===========================================================================*/
@@ -232,7 +271,7 @@ int process_message PROTO((lp_prob *p, int r_bufid, int *pindex, int *pitnum));
 void lp_process_ub_message PROTO((lp_prob *p));
 int receive_active_node PROTO((lp_prob *p));
 int receive_cuts PROTO((lp_prob *p, int first_lp, int no_more_cuts_count));
-void send_node_desc PROTO((lp_prob *p, char node_type));
+void send_node_desc PROTO((lp_prob *p, int node_type));
 array_desc pack_array_desc_diff PROTO((array_desc *ad, array_desc *new_ad,
 				       int *itmp));
 basis_desc pack_basis_diff PROTO((node_desc *oldnode, node_desc *newnode,
@@ -247,6 +286,8 @@ void send_branching_info PROTO((lp_prob *p, branch_obj *can, char *action,
 				int *keep)); 
 void send_lp_is_free PROTO((lp_prob *p));
 void send_cuts_to_pool PROTO((lp_prob *p, int eff_cnt_limit));
+int add_bound_changes_to_desc PROTO((node_desc *new_tm_desc, lp_prob *p));
+int update_cut_parameters(lp_prob *p);
 
 /*===========================================================================*/
 /*======================= Freeing things (lp_free.c) ========================*/
@@ -272,7 +313,7 @@ int receive_lp_data_u PROTO((lp_prob *p));
 void free_prob_dependent_u PROTO((lp_prob *p));
 int comp_cut_name PROTO((const void *c0, const void *c1));
 int create_subproblem_u PROTO((lp_prob *p));
-int is_feasible_u PROTO((lp_prob *p, char branching));
+int is_feasible_u PROTO((lp_prob *p, char branching, char is_last_iter));
 void send_feasible_solution_u PROTO((lp_prob *p, int xlevel, int xindex,
 				     int xiter_num, double lpetol,
 				     double new_ub, int cnt, int *xind,
@@ -298,7 +339,7 @@ int generate_column_u PROTO((lp_prob *p, int lpcutnum, cut_data **cuts,
 void print_stat_on_cuts_added_u PROTO((lp_prob *p, int added_rows));
 void purge_waiting_rows_u PROTO((lp_prob *p));
 int generate_cuts_in_lp_u PROTO((lp_prob *p));
-char analyze_multicriteria_solution PROTO((lp_prob *p, int *indices,
+int analyze_multicriteria_solution PROTO((lp_prob *p, int *indices,
 					   double *values, int length,
 					   double *true_objval, double etol,
 					   char branching));

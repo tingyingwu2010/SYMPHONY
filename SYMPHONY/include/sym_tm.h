@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -56,7 +56,7 @@ struct LP_PROB;
 typedef struct TM_PROB{
    tm_params       par;
    int             master;
-   char            has_ub;
+   int             has_ub;
    char            has_ub_estimate;
    double          start_time;
    double          ub;       /* the best global upper bound found */
@@ -112,7 +112,18 @@ typedef struct TM_PROB{
 
    node_times      comp_times;         /* keeps track of the computation times
 			                  for the problem */
+   lp_stat_desc    lp_stat;         
+   rc_desc        *reduced_costs;
 
+   /* pseudo costs and reliability measures */
+   double         *pcost_down;
+   double         *pcost_up;
+   int            *br_rel_down;
+   int            *br_rel_up;
+   int            *br_rel_cand_list;
+   int            *br_rel_down_min_level;
+   int            *br_rel_up_min_level;
+   
    /* some temporary stuff */
    bc_node      ***rpath;
    int            *rpath_size;
@@ -125,6 +136,8 @@ typedef struct TM_PROB{
 #endif
 
    tm_temp         tmp;
+   /* solution pool */
+   sp_desc  *sp;
 }tm_prob;
 
 /*===========================================================================*/
@@ -139,17 +152,19 @@ void calculate_widths PROTO((bc_node *node, int *widths));
 int start_node PROTO((tm_prob *tm, int thread_num));
 bc_node *del_best_node PROTO((tm_prob *tm));
 void insert_new_node PROTO((tm_prob *tm, bc_node *new_node));
-char node_compar PROTO((int rule, bc_node *node0, bc_node *node1));
+int node_compar PROTO((int rule, bc_node *node0, bc_node *node1));
 int assign_pool PROTO((tm_prob *tm, int oldpool, process_set *pools,
 		       int *active_nodes_per_pool, int *nodes_per_pool));
 int generate_children PROTO((tm_prob *tm, bc_node *node, branch_obj *bobj,
 			     double *objval, int *feasible, char *action,
-			     char olddive, int *keep, int new_branching_cut));
+			     int olddive, int *keep, int new_branching_cut));
 char shall_we_dive PROTO((tm_prob *tm, double objval));
 int purge_pruned_nodes PROTO((tm_prob *tm, bc_node *node, int category));
 int find_process_index PROTO((process_set *pset, int tid));
 void mark_lp_process_free PROTO((tm_prob *tm, int lp, int cp));
 int add_cut_to_list PROTO((tm_prob *tm, cut_data *cut));
+void install_new_ub PROTO((tm_prob *tm, double new_ub, int opt_thread_num,
+			   int bc_index, char branching, int feasible));
 int find_tree_lb PROTO((tm_prob *tm));
 
 /*--------------- Function related to merging descriptions ------------------*/
@@ -208,7 +223,7 @@ process_set start_processes PROTO((tm_prob *tm,
 				   int machnum, char **mach));
 void stop_processes PROTO((process_set *pset));
 char processes_alive PROTO((tm_prob *tm));
-void send_active_node PROTO((tm_prob *tm, bc_node *node, char colgen_strat,
+void send_active_node PROTO((tm_prob *tm, bc_node *node, int colgen_strat,
 			     int thread_num));
 void receive_node_desc PROTO((tm_prob *tm, bc_node *n));
 void process_branching_info PROTO((tm_prob *tm, bc_node *node));
@@ -219,4 +234,6 @@ void unpack_cut_set PROTO((tm_prob *tm, int sender, int cutnum,
 int receive_lp_timing PROTO((tm_prob *tm));
 
 void sym_catch_c PROTO((int num));
+int merge_bound_changes PROTO((bounds_change_desc **bnd_change_ptr, 
+                               bounds_change_desc  *p_bnd_change));
 #endif

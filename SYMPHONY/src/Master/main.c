@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -172,7 +172,7 @@ int main(int argc, char **argv)
 	    printf("See sym_return_values.h for meaning of code.\n\n");
 	    exit(termcode);
 	 }
-
+	 printf("\n");
 	 sym_solve(env);
       }
    
@@ -193,7 +193,7 @@ int main(int argc, char **argv)
      printf("***** WELCOME TO SYMPHONY INTERACTIVE MIP SOLVER ******\n\n"
 	    "Please type 'help'/'?' to see the main commands!\n\n");
 
-     env->par.verbosity = -1;
+     sym_set_int_param(env, "verbosity", -1);
 
 #ifdef HAS_READLINE
      sym_initialize_readline();
@@ -299,12 +299,14 @@ int main(int argc, char **argv)
 	 } 
 	 if(strcmp(args[0], "solve") == 0){
 	   start_time = wall_clock(NULL);
+	   printf("\n");
 	   termcode = sym_solve(env);
 	   finish_time = wall_clock(NULL);
 	 } else {
 	   is_int = env->mip->is_int;
 	   env->mip->is_int  = (char *)   calloc(CSIZE, env->mip->n);
 	   start_time = wall_clock(NULL);
+	   printf("\n");
 	   termcode = sym_solve(env);
 	   finish_time = wall_clock(NULL);
 	   env->mip->is_int = is_int;
@@ -424,10 +426,11 @@ int main(int argc, char **argv)
 	       
 	       print_statistics(&(env->warm_start->comp_times), 
 				&(env->warm_start->stat),
+                                NULL,
 				env->warm_start->ub, env->warm_start->lb, 
 				initial_time, start_time, finish_time,
 				env->mip->obj_offset, env->mip->obj_sense,
-				env->warm_start->has_ub);
+				env->warm_start->has_ub,NULL);
 	       printf("\n");	       
 	     }
 	     strcpy(args[1], "");	       
@@ -567,7 +570,7 @@ int main(int argc, char **argv)
 	 printf("Resetting...\n");
 	 sym_close_environment(env);
 	 env = sym_open_environment();
-	 env->par.verbosity = -1;
+	 sym_set_int_param(env, "verbosity", -1);
        } else if ((strcmp(args[0], "quit") == 0) ||
 		  (strcmp(args[0], "exit") == 0)){
 	 break;
@@ -606,7 +609,7 @@ int sym_help(const char *line)
   } else if (strcmp(line, "set_help") == 0 || strcmp(line, "display_param_help") == 0){
 
     printf("\n\nList of parameters: \n\n"); 
-    printf("verbosity                          : set verbosity (default: 1)\n"
+    printf("verbosity                          : set verbosity (default: -1)\n"
 	   "upper_bound                        : use an initial upper bound\n"
 	   "find_first_feasible                : whether to find the first feasible solution or\n"
 	   "                                     to solve the optimality (default: 0) \n"

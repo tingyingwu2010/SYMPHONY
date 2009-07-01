@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -150,6 +150,7 @@ int process_message(lp_prob *p, int r_bufid, int *pindex, int *pitnum)
       /* Send back the timing data for the first phase */
       s_bufid = init_send(DataInPlace);
       send_char_array((char *)&p->comp_times, sizeof(node_times));
+      send_char_array((char *)&p->lp_stat, sizeof(lp_stat_desc));
       send_msg(p->tree_manager, LP__TIMING);
 #ifdef DO_TESTS
       if (pindex){
@@ -205,6 +206,7 @@ int receive_active_node(lp_prob *p)
 {
    int i, s_bufid;
    node_desc *desc;
+   char ch;
 
    desc = p->desc = (node_desc *) malloc( sizeof(node_desc) );
 
@@ -212,7 +214,7 @@ int receive_active_node(lp_prob *p)
    receive_int_array(&p->bc_index, 1);
    receive_int_array(&p->bc_level, 1);
    receive_dbl_array(&p->lp_data->objval, 1);
-   receive_char_array(&p->colgen_strategy, 1);
+   receive_int_array(&p->colgen_strategy, 1);
    receive_int_array(&desc->nf_status, 1);
 
    if (! (p->colgen_strategy & COLGEN_REPRICING) &&
@@ -281,10 +283,11 @@ int receive_active_node(lp_prob *p)
    if (p->bc_level > 0){
       REMALLOC(p->bdesc, branch_desc, p->bdesc_size, p->bc_level, BB_BUNCH);
       receive_char_array((char *)p->bdesc,
-				 p->bc_level * sizeof(branch_desc));
+				 p->bc_level * (int)sizeof(branch_desc));
    }
 
-   receive_char_array(&p->dive, 1);
+   receive_char_array(&ch, 1);
+   p->dive = (int) ch;
 
    /*------------------------------------------------------------------------*\
     * Unpack the user defined description
@@ -501,12 +504,13 @@ if (newad.size > 0){                                                        \
       
 /*===========================================================================*/
 
-void send_node_desc(lp_prob *p, char node_type)
+void send_node_desc(lp_prob *p, int node_type)
 {
    node_desc *new_lp_desc = NULL, *new_tm_desc = NULL;
    node_desc *lp_desc = p->desc;
    char repricing = (p->colgen_strategy & COLGEN_REPRICING) ? 1 : 0;
-   char deal_with_nf;
+   int deal_with_nf;
+   char ch;
    
    LPdata *lp_data = p->lp_data;
 
@@ -515,10 +519,42 @@ void send_node_desc(lp_prob *p, char node_type)
    bc_node *n = repricing ? (bc_node *) calloc(1, sizeof(bc_node)) :
       tm->active_nodes[p->proc_index];
    node_desc *tm_desc = &n->desc;   
+
+   if (p->bc_level > 0) {
+      n->num_cut_iters_in_path =
+         p->lp_stat.num_cut_iters_in_path;
+      n->num_cuts_added_in_path =
+         p->lp_stat.num_cuts_added_in_path;
+      n->num_cuts_slacked_out_in_path =
+         p->lp_stat.num_cuts_slacked_out_in_path;
+      n->avg_cuts_obj_impr_in_path =
+         p->lp_stat.avg_cuts_obj_impr_in_path;
+
+      n->avg_br_obj_impr_in_path =
+         p->lp_stat.avg_br_obj_impr_in_path;
+      
+   } else {
+      n->num_cut_iters_in_path = 0;
+      n->num_cuts_added_in_path = 0;
+      n->num_cuts_slacked_out_in_path = 0;
+      n->avg_cuts_obj_impr_in_path = 0;
+
+      n->num_str_br_cands_in_path = 0;
+      n->avg_br_obj_impr_in_path = 0;
+
+      n->num_fp_calls_in_path = 0;
+   }
+
+   n->start_objval = p->lp_stat.start_objval;
+   n->end_objval = p->lp_stat.end_objval;
+   n->num_str_br_cands_in_path =
+      p->lp_stat.num_str_br_cands_in_path;
+   n->num_fp_calls_in_path =
+      p->lp_stat.num_fp_calls_in_path;   
+
 #else
    int s_bufid;
 #endif
-   
 
 #ifdef SENSITIVITY_ANALYSIS
       if (tm->par.sensitivity_analysis && 
@@ -584,8 +620,27 @@ void send_node_desc(lp_prob *p, char node_type)
       if (tm->par.keep_description_of_pruned == DISCARD ||
 	  tm->par.keep_description_of_pruned == KEEP_ON_DISK_VBC_TOOL){
 #pragma omp critical (tree_update)
-	 purge_pruned_nodes(tm, n, node_type == FEASIBLE_PRUNED ?
-			    VBC_FEAS_SOL_FOUND : VBC_PRUNED);
+	 if (tm->par.vbc_emulation == VBC_EMULATION_FILE_NEW) {
+	    int vbc_node_pr_reason;
+	    switch (node_type) {
+	     case INFEASIBLE_PRUNED:
+	       vbc_node_pr_reason = VBC_PRUNED_INFEASIBLE;
+	       break;
+	     case OVER_UB_PRUNED:
+	       vbc_node_pr_reason = VBC_PRUNED_FATHOMED;
+	       break;
+	     case FEASIBLE_PRUNED:
+	       vbc_node_pr_reason = VBC_FEAS_SOL_FOUND;
+	       break;
+	     default:
+	       vbc_node_pr_reason = VBC_PRUNED;
+	    }
+	    purge_pruned_nodes(tm, n, vbc_node_pr_reason);
+	 } else {
+	    purge_pruned_nodes(tm, n, node_type == FEASIBLE_PRUNED ?
+		  VBC_FEAS_SOL_FOUND : VBC_PRUNED);
+	 }
+
 	 if (!repricing)
 	    return;
       }
@@ -610,7 +665,7 @@ void send_node_desc(lp_prob *p, char node_type)
 	              TRUE : FALSE;
       
       new_tm_desc = (node_desc *) calloc(1, sizeof(node_desc)); 
-      
+
       if (p->bc_level == 0){
 	 COPY_ARRAY_DESC(new_tm_desc->uind, new_lp_desc->uind);
 	 COPY_ARRAY_DESC(new_tm_desc->cutind, new_lp_desc->cutind);
@@ -668,6 +723,12 @@ void send_node_desc(lp_prob *p, char node_type)
 		new_lp_desc->desc_size);
       
       merge_descriptions(tm_desc, new_tm_desc);
+      /* 
+       * new_lp_desc used by "lp_prob p" does not need bnd_change. it is meant
+       * only for bc_node->node_desc. hence we insert bnd_change in tm_desc
+       * only
+       */
+      add_bound_changes_to_desc(tm_desc,p);
       free_node_desc(&new_tm_desc);
       
       if (p->par.verbosity > 10){
@@ -723,6 +784,52 @@ void send_node_desc(lp_prob *p, char node_type)
 	    }else{
 	       PRINT_TIME(p->tm, f);
 	       fprintf(f, "P %i %i\n", n->bc_index + 1, VBC_INTERIOR_NODE);
+	       fclose(f); 
+	    }
+	 } else if (p->tm->par.vbc_emulation == VBC_EMULATION_FILE_NEW){
+	    FILE *f;
+#pragma omp critical(write_vbc_emulation_file)
+	    if (!(f = fopen(p->tm->par.vbc_emulation_file_name, "a"))){
+	       printf("\nError opening vbc emulation file\n\n");
+	    }else{
+	       /* calculate measures of infeasibility */
+	       double sum_inf = 0;
+	       int num_inf = 0;
+
+               for (int i=0;i<lp_data->n;i++) {
+                  double v = lp_data->x[i];
+		  if (lp_data->vars[i]->is_int) {
+		     if (fabs(v-floor(v+0.5))>lp_data->lpetol) {
+			num_inf++;
+			sum_inf = sum_inf + fabs(v-floor(v+0.5));
+		     }
+		  }
+	       }
+
+	       char *reason = (char *)malloc(50*CSIZE);
+	       PRINT_TIME2(p->tm, f);
+	       sprintf(reason, "%s %i", "branched", n->bc_index + 1);
+	       if (n->bc_index==0) {
+		  sprintf(reason, "%s %i", reason, 0);
+	       } else {
+		  sprintf(reason, "%s %i", reason, n->parent->bc_index + 1);
+	       }
+
+	       char branch_dir='M';
+	       if (n->bc_index>0) {
+		  if (n->parent->children[0]==n) {
+		     branch_dir = n->parent->bobj.sense[0];
+		  } else {
+		     branch_dir = n->parent->bobj.sense[1];
+		  }
+		  if (branch_dir == 'G') {
+		     branch_dir = 'R';
+		  }
+	       }
+	       sprintf(reason, "%s %c %f %f %i", reason, branch_dir,
+		       lp_data->objval+p->mip->obj_offset, sum_inf, num_inf);
+	       fprintf(f, "%s\n", reason);
+	       FREE(reason);
 	       fclose(f); 
 	    }
 	 }else if (p->tm->par.vbc_emulation == VBC_EMULATION_LIVE){
@@ -870,8 +977,26 @@ void send_node_desc(lp_prob *p, char node_type)
 #pragma omp critical (write_pruned_node_file)
 	 write_pruned_nodes(tm, n);
 #pragma omp critical (tree_update)
-	 purge_pruned_nodes(tm, n, node_type == FEASIBLE_PRUNED ?
-			    VBC_FEAS_SOL_FOUND : VBC_PRUNED);
+	 if (tm->par.vbc_emulation == VBC_EMULATION_FILE_NEW) {
+	    int vbc_node_pr_reason;
+	    switch (node_type) {
+	     case INFEASIBLE_PRUNED:
+	       vbc_node_pr_reason = VBC_PRUNED_INFEASIBLE;
+	       break;
+	     case OVER_UB_PRUNED:
+	       vbc_node_pr_reason = VBC_PRUNED_FATHOMED;
+	       break;
+	     case FEASIBLE_PRUNED:
+	       vbc_node_pr_reason = VBC_FEAS_SOL_FOUND;
+	       break;
+	     default:
+	       vbc_node_pr_reason = VBC_PRUNED;
+	    }
+	    purge_pruned_nodes(tm, n, vbc_node_pr_reason);
+	 } else {
+	    purge_pruned_nodes(tm, n, node_type == FEASIBLE_PRUNED ?
+		  VBC_FEAS_SOL_FOUND : VBC_PRUNED);
+	 }
       }
    }
 #else
@@ -888,10 +1013,11 @@ void send_node_desc(lp_prob *p, char node_type)
        !p->par.keep_description_of_pruned){
       s_bufid = init_send(DataInPlace);
       send_char_array(&repricing, 1);
-      send_char_array(&node_type, 1);
+      ch = (char) node_type;
+      send_char_array(&ch, 1);
       if (node_type == FEASIBLE_PRUNED) {
-	 if (!p->par.sensitivity_analysis){ 
-	    send_int_array(&p->desc->uind.size, 1);
+	 if (!p->par.sensitivity_analysis){
+	    send_int_array(&(p->desc->uind.size), 1);
 	    send_dbl_array(lp_data->x, p->desc->uind.size);
 	 }
       }
@@ -902,10 +1028,13 @@ void send_node_desc(lp_prob *p, char node_type)
 
    new_lp_desc = create_explicit_node_desc(p);
 
+   new_lp_desc->bnd_change = NULL; /* TODO: implement this */
+
    /* Now start the real message */
    s_bufid = init_send(DataInPlace);
    send_char_array(&repricing, 1);
-   send_char_array(&node_type, 1);
+   ch = (char) node_type;
+   send_char_array(&ch, 1);
    send_dbl_array(&lp_data->objval, 1);
    if (node_type == INTERRUPTED_NODE){
       send_msg(p->tree_manager, LP__NODE_DESCRIPTION);
@@ -1571,6 +1700,5 @@ void send_cuts_to_pool(lp_prob *p, int eff_cnt_limit)
 
 #endif
 }
-
-
-
+/*===========================================================================*/
+/*===========================================================================*/

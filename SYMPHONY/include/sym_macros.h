@@ -2,10 +2,10 @@
 /*                                                                           */
 /* This file is part of the SYMPHONY MILP Solver Framework.                  */
 /*                                                                           */
-/* SYMPHONY was jointly developed by Ted Ralphs (tkralphs@lehigh.edu) and    */
+/* SYMPHONY was jointly developed by Ted Ralphs (ted@lehigh.edu) and         */
 /* Laci Ladanyi (ladanyi@us.ibm.com).                                        */
 /*                                                                           */
-/* (c) Copyright 2000-2008 Ted Ralphs. All Rights Reserved.                  */
+/* (c) Copyright 2000-2009 Ted Ralphs. All Rights Reserved.                  */
 /*                                                                           */
 /* This software is licensed under the Common Public License. Please see     */
 /* accompanying file for terms.                                              */
@@ -31,13 +31,13 @@
 #ifdef REMALLOC
 #undef REMALLOC
 #endif
-#define REMALLOC(ptr, ptrtype, oldsize, newsize, block_size)	\
-{								\
-   if (!ptr || (oldsize < newsize)){				\
-      FREE(ptr);						\
-      oldsize = (newsize) + (block_size);			\
-      ptr = (ptrtype *) malloc((oldsize) * sizeof(ptrtype));	\
-   }								\
+#define REMALLOC(ptr, ptrtype, oldsize, newsize, block_size)	             \
+{								             \
+   if (!ptr || (oldsize < newsize)){				             \
+      FREE(ptr);						             \
+      oldsize = newsize + (int)block_size;                                   \
+      ptr = (ptrtype *) malloc((size_t)(oldsize * sizeof(ptrtype)));	     \
+   }								             \
 }
 
 #ifdef REALLOC
@@ -46,8 +46,9 @@
 #define REALLOC(ptr, ptrtype, oldsize, newsize, block_size)		     \
 {									     \
    if (!ptr || (oldsize < newsize)){					     \
-      oldsize = (newsize) + (block_size);				     \
-      ptr = (ptrtype *) realloc((char *)ptr, ((oldsize) * sizeof(ptrtype))); \
+      oldsize = newsize + (int)(block_size);				     \
+      ptr = (ptrtype *) realloc((char *)ptr, (size_t)                        \
+                                (oldsize * sizeof(ptrtype)));                \
    }									     \
 }
 
@@ -166,6 +167,12 @@ if ((termcode = f) < 0)                                                    \
    return(termcode);
 
 /*---------------------- Standard macros ------------------------------------*/
+
+#ifdef PRINT
+#undef PRINT
+#endif
+#define PRINT(a, b, c) \
+   if ((a) > (b)) printf c
 
 #ifdef FREE
 #undef FREE
