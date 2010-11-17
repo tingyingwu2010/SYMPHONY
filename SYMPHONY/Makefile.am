@@ -14,63 +14,74 @@
 #                                                                           #
 #===========================================================================#
 
-## $Id$
+## $Id: Makefile.am 344 2006-06-01 19:17:05Z menal $
 
 AUTOMAKE_OPTIONS = foreign
-
-EXTRA_DIST = 
 
 ########################################################################
 #                          Subdirectories                              #
 ########################################################################
 
-# subdirs is set by configure as the list of all subdirectories to recurse
-# into
+SUBDIRS = src
 
-SUBDIRS = $(subdirs)
+# We don't want to compile the test subdirectory, unless the test target is
+# specified.  But we need to list it as subdirectory to make sure that it is
+# included in the tarball
 
-#if ADD_GLPK
-#   SUBDIRS += ThirdParty/Glpk
-#endif
+if ALWAYS_FALSE
+  SUBDIRS += test
+endif
 
-#SUBDIRS += CoinUtils Data/Sample Data/miplib3 Data/Netlib Osi Cgl 
+########################################################################
+#             Additional files to be included in tarball               #
+########################################################################
 
-#if ADD_CLP
-#   SUBDIRS += Clp
-#endif 
+# Here we need include all files that are not mentioned in other Makefiles
 
-#SUBDIRS += SYMPHONY
+# FIXME-Add everything here!
+
+ EXTRA_DIST = 
 
 ########################################################################
 #                           Extra Targets                              #
 ########################################################################
 
-test: all
-	cd SYMPHONY; $(MAKE) test
+ test: all
+	cd test; $(MAKE) test
 
-fulltest: all
-	cd SYMPHONY; $(MAKE) fulltest
+ unitTest: test
 
-ptest: all
-	cd SYMPHONY; $(MAKE) ptest
+ fulltest: all
+	cd test; $(MAKE) fulltest
 
-pfulltest: all
-	cd SYMPHONY; $(MAKE) pfulltest
+ ptest: all
+	cd test; $(MAKE) ptest
 
-unitTest: test
+ punitTest: ptest
 
-punitTest: ptest
+ pfulltest: all
+	cd test; $(MAKE) pfulltest
 
-tests: all
-	for dir in $(SUBDIRS); do \
-	  if test -r $$dir/test/Makefile; then \
-	    (cd $$dir; $(MAKE) test) \
-	  fi; \
-	done
+ clean-local:
+	if test -r test/Makefile; then cd test; $(MAKE) clean; fi
 
-unitTests: tests
+ distclean-local:
+	if test -r test/Makefile; then cd test; $(MAKE) distclean; fi
 
-.PHONY: test unitTest ptest punitTest tests unitTests fulltest pfulltest
+ .PHONY: test unitTest ptest punitTest
+
+########################################################################
+#                  Installation of the addlibs file                    #
+########################################################################
+
+addlibsfile = sym_addlibs.txt
+addlibsdir = $(prefix)/share/doc/coin/$(PACKAGE_NAME)
+
+install-exec-local: install-doc
+	$(install_sh_DATA) $(addlibsfile) $(DESTDIR)$(addlibsdir)/$(addlibsfile)
+
+uninstall-local: uninstall-doc
+	rm -f $(DESTDIR)$(addlibsdir)/$(addlibsfile)
 
 ########################################################################
 #                         Maintainer Stuff                             #
@@ -79,4 +90,4 @@ unitTests: tests
 # Files that are generated and should be cleaned with make distclean
 DISTCLEANFILES =
 
-include BuildTools/Makemain.inc
+include ../BuildTools/Makemain.inc
